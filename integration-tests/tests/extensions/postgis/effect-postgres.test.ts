@@ -2,7 +2,19 @@ import { PgClient } from '@effect/sql-pg';
 import { expect, it } from '@effect/vitest';
 import { defineRelations, sql } from 'drizzle-orm';
 import * as PgDrizzle from 'drizzle-orm/effect-postgres';
-import { bigserial, customType, geometry, integer, line, pgTable, point } from 'drizzle-orm/pg-core';
+import {
+	bigserial,
+	customType,
+	geography,
+	geometry,
+	integer,
+	line,
+	type MultiPolygon,
+	pgTable,
+	type Point,
+	point,
+	type Polygon,
+} from 'drizzle-orm/pg-core';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Redacted from 'effect/Redacted';
@@ -14,9 +26,11 @@ const items = pgTable('items', {
 	pointObj: point('point_xy', { mode: 'xy' }),
 	line: line('line'),
 	lineObj: line('line_abc', { mode: 'abc' }),
-	geo: geometry('geo', { type: 'point' }),
+	geo: geometry('geo', { type: 'point', mode: 'tuple' }),
 	geoObj: geometry('geo_obj', { type: 'point', mode: 'xy' }),
 	geoSrid: geometry('geo_options', { type: 'point', mode: 'xy', srid: 4000 }),
+	footprint: geometry('footprint', { type: 'MultiPolygon', srid: 4326 }),
+	place: geography('place', { type: 'Point' }),
 });
 
 const relations = defineRelations({ items }, (r) => ({
@@ -56,7 +70,9 @@ beforeEach(async () => {
 						"line_abc" line,
 						"geo" geometry(point),
 						"geo_obj" geometry(point),
-						"geo_options" geometry(point,4000)
+						"geo_options" geometry(point,4000),
+						"footprint" geometry(multipolygon,4326),
+						"place" geography(point)
 					);
 				`);
 			})
@@ -72,6 +88,8 @@ const seed = {
 	geo: [1, 2] as [number, number],
 	geoObj: { x: 1, y: 2 },
 	geoSrid: { x: 1, y: 2 },
+	footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] } as MultiPolygon,
+	place: { type: 'Point', coordinates: [19.0402, 47.4979] } as Point,
 };
 const expected = { id: 1, ...seed };
 
@@ -101,6 +119,8 @@ it.effect('null geometries survive driver-side parsing', () =>
 				geo: null,
 				geoObj: null,
 				geoSrid: null,
+				footprint: null,
+				place: null,
 			}]);
 		})
 	));
@@ -225,5 +245,44 @@ it.effect('No wrong codec autoresolution', () =>
 				id: 1,
 				polygon: [[[30.0, 50.0], [30.1, 50.0], [30.1, 50.1], [30.0, 50.1], [30.0, 50.0]]],
 			}]);
+		})
+	));
+
+it.effect('GeoJSON columns round trip, also inside arrays and through `mapWith`', () =>
+	withDb((db) =>
+		Effect.gen(function*() {
+			const square: Polygon = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+			const shapes = pgTable('geo_shapes', {
+				id: integer('id').primaryKey(),
+				polygon: geometry('polygon', { type: 'Polygon', srid: 4326 }),
+				parts: geometry('parts', { type: 'Polygon', srid: 4326 }).array(),
+				place: geography('place', { type: 'Point' }),
+			});
+			yield* db.execute(sql`drop table if exists geo_shapes cascade`);
+			yield* db.execute(sql`
+				CREATE TABLE geo_shapes (
+					id integer PRIMARY KEY,
+					"polygon" geometry(polygon,4326),
+					"parts" geometry(polygon,4326)[],
+					"place" geography(point)
+				);
+			`);
+			const row = {
+				id: 1,
+				polygon: square,
+				parts: [square, { type: 'Polygon', coordinates: [] } as Polygon],
+				place: { type: 'Point', coordinates: [19.0402, 47.4979] } as Point,
+			};
+			const inserted = yield* db.insert(shapes).values(row).returning();
+			expect(inserted).toStrictEqual([row]);
+			expect(yield* db.select().from(shapes)).toStrictEqual([row]);
+
+			const derived = yield* db.select({
+				centroid: sql`ST_Centroid(${shapes.polygon})`.mapWith(shapes.polygon),
+				srid: sql<number>`ST_SRID(${shapes.polygon})`,
+			}).from(shapes);
+			expect(derived).toStrictEqual([{ centroid: { type: 'Point', coordinates: [0.5, 0.5] }, srid: 4326 }]);
+
+			yield* db.execute(sql`drop table geo_shapes cascade`);
 		})
 	));
