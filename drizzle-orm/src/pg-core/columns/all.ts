@@ -17,6 +17,7 @@ import { macaddr } from './macaddr.ts';
 import { macaddr8 } from './macaddr8.ts';
 import { decimal, numeric } from './numeric.ts';
 import { point } from './point.ts';
+import { geography } from './postgis_extension/geography.ts';
 import { geometry } from './postgis_extension/geometry.ts';
 import { real } from './real.ts';
 import { serial } from './serial.ts';
@@ -54,6 +55,7 @@ export function getPgColumnBuilders() {
 		numeric,
 		decimal,
 		point,
+		geography,
 		geometry,
 		real,
 		serial,
