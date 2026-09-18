@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { ewkbToGeoJSON, parseEWKB } from '~/pg-core/columns/postgis_extension/ewkb.ts';
-import { geoJSONToEWKT, parseEWKT } from '~/pg-core/columns/postgis_extension/ewkt.ts';
-import type { Geometry, Point } from '~/pg-core/columns/postgis_extension/geojson.ts';
+import { ewkbToGeoJSON, parseEWKB } from '../../src/utils/postgis/ewkb';
+import { geoJSONToEWKT, parseEWKT } from '../../src/utils/postgis/ewkt';
+import type { Geometry, Point } from '../../src/utils/postgis/geojson';
+
+/**
+ * A copy of `drizzle-orm/tests/postgis-ewkb.test.ts` run against the kit's
+ * copy of the EWKB and EWKT code in `src/utils/postgis/`. The two copies
+ * must stay equivalent; a vector added on one side belongs on the other.
+ */
 
 /**
  * Fixture vectors produced by PostGIS 3.4 with:

@@ -27,7 +27,7 @@ import type {
 	View,
 } from './ddl';
 import { createDDL, tableFromDDL } from './ddl';
-import { defaults, defaultsCommutative, existsInViewDef, isSerialType } from './grammar';
+import { defaults, defaultsCommutative, existsInViewDef, isSerialType, normalizePostgisType } from './grammar';
 import type { JsonAlterPrimaryKey, JsonRecreateIndex, JsonStatement } from './statements';
 import { prepareStatement } from './statements';
 
@@ -781,15 +781,9 @@ export const ddlDiff = async (
 			}
 		}
 
-		// geometry
-		if (it.type && it.$right.type.startsWith('geometry(point') && it.$left.type.startsWith('geometry(point')) {
-			// geometry(point,0)
-			const leftSrid = it.$left.type.split(',')[1]?.replace(')', '');
-			const rightSrid = it.$right.type.split(',')[1]?.replace(')', '');
-
-			// undefined or 0 are defaults srids
-			if (typeof leftSrid === 'undefined' && rightSrid === '0') delete it.type;
-			if (typeof rightSrid === 'undefined' && leftSrid === '0') delete it.type;
+		// PostGIS types: casing, SRID 0 and the implicit geography SRID do not make a diff
+		if (it.type && normalizePostgisType(it.type.from) === normalizePostgisType(it.type.to)) {
+			delete it.type;
 		}
 
 		// numeric(19) === numeric(19,0)

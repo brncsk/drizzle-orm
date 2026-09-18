@@ -9,6 +9,7 @@ import {
 	date,
 	doublePrecision,
 	foreignKey,
+	geography,
 	geometry,
 	index,
 	inet,
@@ -1041,18 +1042,18 @@ test('geometry point with srid', async () => {
 	try {
 		const schema1 = {
 			users: pgTable('users', {
-				id1: geometry('id1'),
-				id2: geometry('id2', { srid: 0 }),
-				id3: geometry('id3', { srid: 10 }),
-				id4: geometry('id4'),
+				id1: geometry('id1', { type: 'point' }),
+				id2: geometry('id2', { type: 'point', srid: 0 }),
+				id3: geometry('id3', { type: 'point', srid: 10 }),
+				id4: geometry('id4', { type: 'point' }),
 			}),
 		};
 		const schema2 = {
 			users: pgTable('users', {
-				id1: geometry('id1', { srid: 0 }),
-				id2: geometry('id2'),
-				id3: geometry('id3', { srid: 12 }),
-				id4: geometry('id4'),
+				id1: geometry('id1', { type: 'point', srid: 0 }),
+				id2: geometry('id2', { type: 'point' }),
+				id3: geometry('id3', { type: 'point', srid: 12 }),
+				id4: geometry('id4', { type: 'point' }),
 			}),
 		};
 
@@ -1077,6 +1078,121 @@ test('geometry point with srid', async () => {
 
 		expect(st).toStrictEqual(st0);
 		expect(pst).toStrictEqual(st0);
+	} catch (error) {
+		await postgisDb.clear();
+		await postgisDb.close();
+		throw error;
+	}
+
+	await postgisDb.clear();
+	await postgisDb.close();
+});
+
+test('geometry and geography subtypes, SRIDs and casing', async () => {
+	const postgisDb = await preparePostgisTestDatabase();
+
+	try {
+		const schema1 = {
+			users: pgTable('users', {
+				any: geometry('any'),
+				anyWithSrid: geometry('any_with_srid', { type: 'Geometry', srid: 0 }),
+				shape: geometry('shape', { type: 'Point', srid: 4326 }),
+				cased: geometry('cased', { type: 'MultiPolygon', srid: 4326 }),
+				zm: geometry('zm', { type: 'LineStringZM' }),
+				place: geography('place', { type: 'Point' }),
+				region: geography('region', { type: 'MultiPolygon', srid: 4326 }),
+				curve: geometry('curve', { type: 'CircularString' }),
+			}),
+		};
+		const schema2 = {
+			users: pgTable('users', {
+				any: geometry('any', { type: 'geometry' }),
+				anyWithSrid: geometry('any_with_srid'),
+				shape: geometry('shape', { type: 'MultiPolygon', srid: 4326 }),
+				cased: geometry('cased', { type: 'multipolygon', srid: 4326 }),
+				zm: geometry('zm', { type: 'linestringzm' }),
+				place: geography('place', { type: 'point', srid: 4326 }),
+				region: geography('region', { type: 'MultiPolygon' }),
+				curve: geometry('curve', { type: 'circularstring' }),
+			}),
+		};
+
+		const { sqlStatements: st } = await diff(schema1, schema2, []);
+
+		await push({ db: postgisDb.db, to: schema1, tables: ['users'], schemas: ['public'] });
+		const { sqlStatements: pst } = await push({
+			db: postgisDb.db,
+			to: schema2,
+			tables: ['users'],
+			schemas: ['public'],
+		});
+
+		// Only the subtype change is a diff: casing, SRID 0 and the implicit geography SRID are not.
+		const st0: string[] = [
+			'ALTER TABLE "users" ALTER COLUMN "shape" SET DATA TYPE geometry(multipolygon,4326) USING "shape"::geometry(multipolygon,4326);',
+		];
+
+		expect(st).toStrictEqual(st0);
+		expect(pst).toStrictEqual(st0);
+	} catch (error) {
+		await postgisDb.clear();
+		await postgisDb.close();
+		throw error;
+	}
+
+	await postgisDb.clear();
+	await postgisDb.close();
+});
+
+test('geometry and geography columns push without a subsequent diff', async () => {
+	const postgisDb = await preparePostgisTestDatabase();
+
+	try {
+		const schema = {
+			users: pgTable('users', {
+				any: geometry('any'),
+				anyWithSrid: geometry('any_with_srid', { srid: 4326 }),
+				point: geometry('point', { type: 'Point', srid: 4326 }),
+				lineZ: geometry('line_z', { type: 'LineStringZ', srid: 3857 }),
+				parts: geometry('parts', { type: 'Polygon', srid: 4326 }).array(),
+				tuple: geometry('tuple', { type: 'Point', mode: 'tuple' }),
+				curve: geometry('curve', { type: 'CircularString' }),
+				geog: geography('geog'),
+				geogWithSrid: geography('geog_with_srid', { srid: 4326 }),
+				place: geography('place', { type: 'Point' }),
+				region: geography('region', { type: 'MultiPolygonM', srid: 4269 }).array('[][]'),
+			}),
+		};
+
+		const { sqlStatements: first } = await push({
+			db: postgisDb.db,
+			to: schema,
+			tables: ['users'],
+			schemas: ['public'],
+		});
+		const { sqlStatements: second } = await push({
+			db: postgisDb.db,
+			to: schema,
+			tables: ['users'],
+			schemas: ['public'],
+		});
+
+		expect(first).toStrictEqual([
+			'CREATE TABLE "users" (\n'
+			+ '\t"any" geometry,\n'
+			+ '\t"any_with_srid" geometry(geometry,4326),\n'
+			+ '\t"point" geometry(point,4326),\n'
+			+ '\t"line_z" geometry(linestringz,3857),\n'
+			+ '\t"parts" geometry(polygon,4326)[],\n'
+			+ '\t"tuple" geometry(point),\n'
+			+ '\t"curve" geometry(circularstring),\n'
+			+ '\t"geog" geography,\n'
+			+ '\t"geog_with_srid" geography(geometry,4326),\n'
+			+ '\t"place" geography(point),\n'
+			+ '\t"region" geography(multipolygonm,4269)[][]\n'
+			+ ');\n',
+		]);
+		expect(second).toStrictEqual([]);
 	} catch (error) {
 		await postgisDb.clear();
 		await postgisDb.close();

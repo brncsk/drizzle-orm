@@ -144,6 +144,37 @@ needed and the value reads well in query logs.
 `.array()` works as for every other column: `geometry({ type: 'Polygon' }).array()`
 reads and writes `Polygon[]`, and `.array('[][]')` gives `Polygon[][]`.
 
+## drizzle-kit
+
+`generate`, `push` and `pull` understand every `geometry` and `geography`
+typmod.
+
+- Types are compared in a canonical form, so none of these produce a
+  migration: a change of casing (`geometry(MultiPolygon,4326)` as PostGIS
+  reports it against `geometry(multipolygon,4326)` as drizzle writes it),
+  SRID `0` against no SRID, `geometry(geometry)` against `geometry`, and
+  `geography(point)` against `geography(point,4326)`.
+- Defaults are written as EWKT literals (`DEFAULT 'SRID=4326;POINT(1 2)'`)
+  and read back from the EWKB that PostgreSQL stores, for every subtype and
+  for arrays. A `geography` default without an SRID is written with
+  `SRID=4326;`, because that is what PostGIS stores.
+- `pull` renders the column with `type` in PostGIS casing and `srid` when it
+  is set (`geometry({ type: 'MultiPolygon', srid: 4326 })`), and renders a
+  default as a GeoJSON literal when the stored EWKT parses and its SRID is
+  the column's. Otherwise the default stays a `sql` expression, for example
+  `sql\`'SRID=3857;POINT(7 8)'\`` on a column with no SRID. Point columns
+  always pull in the GeoJSON mode; add `mode: 'tuple'` or `mode: 'xy'` by
+  hand to keep a legacy shape.
+
+Upgrading a schema that used the point-only `geometry()`:
+
+- A bare `geometry()` used to declare `geometry(point)`. It now declares a
+  typmod-less `geometry`, so `generate` proposes
+  `ALTER COLUMN ... SET DATA TYPE geometry`. Add `type: 'Point'` to keep the
+  column as it is.
+- Point values were `[x, y]` by default. Add `mode: 'tuple'` (or
+  `mode: 'xy'`) to keep the old shape, or switch the code to GeoJSON.
+
 ## Limits
 
 - Curve and surface subtypes (`CircularString`, `CompoundCurve`,

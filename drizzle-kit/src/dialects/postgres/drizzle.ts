@@ -22,8 +22,10 @@ import {
 	PgDialect,
 	PgEnumColumn,
 	PgEnumObjectColumn,
+	PgGeography,
 	PgGeometry,
 	PgGeometryObject,
+	PgGeometryTuple,
 	PgLineABC,
 	PgLineTuple,
 	PgPointObject,
@@ -59,7 +61,8 @@ import type {
 import {
 	defaultNameForFK,
 	defaultNameForPK,
-	GeometryPoint,
+	Geography,
+	Geometry,
 	indexName,
 	Line,
 	maxRangeForIdentityBasedOn,
@@ -188,12 +191,17 @@ export const defaultFromColumn = (
 				: Line.defaultArrayFromDrizzle(def, dimensions, baseColumn.mode)
 			: Line.defaultFromDrizzle(def, baseColumn.mode);
 	}
-	if (is(baseColumn, PgGeometry) || is(baseColumn, PgGeometryObject)) {
+	if (
+		is(baseColumn, PgGeometry) || is(baseColumn, PgGeometryTuple) || is(baseColumn, PgGeometryObject)
+		|| is(baseColumn, PgGeography)
+	) {
+		const grammar = is(baseColumn, PgGeography) ? Geography : Geometry;
+		const config = { srid: baseColumn.srid, type: baseColumn.type };
 		return dimensions > 0 && Array.isArray(def)
 			? def.flat(5).length === 0
 				? "'{}'"
-				: GeometryPoint.defaultArrayFromDrizzle(def, dimensions, baseColumn.mode, baseColumn.srid)
-			: GeometryPoint.defaultFromDrizzle(def, baseColumn.mode, baseColumn.srid);
+				: grammar.defaultArrayFromDrizzle(def, dimensions, baseColumn.mode, config)
+			: grammar.defaultFromDrizzle(def, baseColumn.mode, config);
 	}
 	if (dimensions > 0 && Array.isArray(def)) {
 		if (def.flat(5).length === 0) return "'{}'";
