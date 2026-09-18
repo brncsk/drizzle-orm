@@ -59,6 +59,7 @@ const imports = [
 	'point',
 	'line',
 	'geometry',
+	'geography',
 	'bit',
 	'pgEnum',
 	'customType',

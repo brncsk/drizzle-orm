@@ -5,7 +5,6 @@ import {
 	isDate,
 	isTime,
 	isTimestamp,
-	parseEWKB,
 	parseIntervalFields,
 	stringifyArray,
 	stringifyTuplesArray,
@@ -13,6 +12,8 @@ import {
 	wrapWith,
 } from '../../utils';
 import { parseArray, parseExpressionArray } from '../../utils/parse-pgarray';
+import type { Geometry as GeoJSONGeometry } from '../../utils/postgis';
+import { geoJSONToEWKT, isMOnlyGeometryType, parseEWKB, parseEWKT } from '../../utils/postgis';
 import { parse, stringify } from '../../utils/when-json-met-bigint';
 import { hash } from '../common';
 import { escapeForSqlDefault, escapeForTsLiteral, numberForTs, parseParams, unescapeFromSqlDefault } from '../utils';
@@ -1360,68 +1361,207 @@ export const Line: SqlType = {
 	},
 };
 
-export const GeometryPoint: SqlType = {
-	is: (type: string) => /^\s*geometry\(point(?:,\d+)?\)(?:\[\s*\])*\s*$/i.test(type),
-	drizzleImport: () => 'geometry',
+/** Lowercase PostGIS subtype names and the casing PostGIS itself uses for them. */
+const postgisTypeNames: Record<string, string> = {
+	geometry: 'Geometry',
+	point: 'Point',
+	linestring: 'LineString',
+	polygon: 'Polygon',
+	multipoint: 'MultiPoint',
+	multilinestring: 'MultiLineString',
+	multipolygon: 'MultiPolygon',
+	geometrycollection: 'GeometryCollection',
+	circularstring: 'CircularString',
+	compoundcurve: 'CompoundCurve',
+	curvepolygon: 'CurvePolygon',
+	multicurve: 'MultiCurve',
+	multisurface: 'MultiSurface',
+	polyhedralsurface: 'PolyhedralSurface',
+	tin: 'TIN',
+	triangle: 'Triangle',
+};
+
+/**
+ * Rewrites a PostGIS subtype name in the casing drizzle-orm's `PgGeometryType`
+ * union uses: `multipolygonzm` becomes `MultiPolygonZM`. Unknown names are
+ * returned as written.
+ */
+export const postgisTypeName = (name: string): string => {
+	const lower = name.toLowerCase();
+	for (const suffix of ['zm', 'z', 'm', '']) {
+		if (!lower.endsWith(suffix)) continue;
+		const base = suffix ? lower.slice(0, -suffix.length) : lower;
+		const known = postgisTypeNames[base];
+		if (known) return known + suffix.toUpperCase();
+	}
+	return name;
+};
+
+const POSTGIS_TYPE = /^\s*(geometry|geography)(?:\s*\(\s*(\w+)\s*(?:,\s*(\d+)\s*)?\))?((?:\s*\[\s*\])*)\s*$/i;
+
+/** Splits `geometry(multipolygon,4326)[]` into its parts; `null` for any other type. */
+export const splitPostgisType = (
+	type: string,
+):
+	| { base: 'geometry' | 'geography'; name: string | undefined; srid: number | undefined; dimensions: number }
+	| null =>
+{
+	const match = POSTGIS_TYPE.exec(type);
+	if (!match) return null;
+	return {
+		base: match[1]!.toLowerCase() as 'geometry' | 'geography',
+		name: match[2],
+		srid: match[3] === undefined ? undefined : Number(match[3]),
+		dimensions: (match[4]!.match(/\[/g) ?? []).length,
+	};
+};
+
+/**
+ * Canonical form of a PostGIS column type, so that the type drizzle emits and
+ * the type PostGIS reports compare equal:
+ *
+ * - names are lowercased and whitespace is removed;
+ * - `geometry(geometry)` and SRID `0` mean "unconstrained", so
+ *   `geometry(point,0)` is `geometry(point)` and `geometry(geometry,0)` is `geometry`;
+ * - PostGIS applies SRID 4326 to a `geography` subtype without one, so
+ *   `geography(point)` is `geography(point,4326)`.
+ *
+ * Types that are not PostGIS types are returned unchanged.
+ */
+export const normalizePostgisType = (type: string): string => {
+	const parts = splitPostgisType(type);
+	if (!parts) return type;
+	const suffix = '[]'.repeat(parts.dimensions);
+	const name = parts.name?.toLowerCase();
+	if (parts.base === 'geometry') {
+		const srid = parts.srid === 0 ? undefined : parts.srid;
+		if ((name === undefined || name === 'geometry') && srid === undefined) return `geometry${suffix}`;
+		return `geometry(${name ?? 'geometry'}${srid === undefined ? '' : `,${srid}`})${suffix}`;
+	}
+	if (name === undefined) return `geography${suffix}`;
+	const srid = parts.srid === undefined || parts.srid === 0 ? 4326 : parts.srid;
+	return `geography(${name},${srid})${suffix}`;
+};
+
+/** Options `defaultFromDrizzle` receives for a PostGIS column: its declared SRID and subtype. */
+interface PostgisColumnConfig {
+	srid?: number | undefined;
+	type?: string | undefined;
+}
+
+const isGeoJSON = (value: unknown): value is GeoJSONGeometry =>
+	typeof value === 'object' && value !== null && typeof (value as { type?: unknown }).type === 'string';
+
+/**
+ * `'SRID=4326;POINT(1 2)'` for one value of a PostGIS column, in any of its
+ * three modes. PostGIS stores a default with the SRID its literal carries,
+ * and tags a `geography` literal without one as 4326, so the SRID written
+ * here is what introspection reads back.
+ */
+const postgisDefaultValue = (
+	base: 'geometry' | 'geography',
+	value: unknown,
+	mode: unknown,
+	config: PostgisColumnConfig | undefined,
+): string => {
+	const srid = config?.srid ? config.srid : base === 'geography' ? 4326 : undefined;
+	const prefix = srid ? `SRID=${srid};` : '';
+	if (mode === 'tuple') {
+		const v = value as number[];
+		return v.length > 0 ? `'${prefix}POINT(${v[0]} ${v[1]})'` : '';
+	}
+	if (mode === 'object') {
+		const v = value as { x: number; y: number };
+		return Object.values(v).length > 0 ? `'${prefix}POINT(${v.x} ${v.y})'` : '';
+	}
+	if (isGeoJSON(value)) {
+		return `'${geoJSONToEWKT(value, { srid, mOnly: isMOnlyGeometryType(config?.type) })}'`;
+	}
+	// A custom column over a PostGIS type: its default is whatever the user's `toDriver` produced.
+	return String(value);
+};
+
+/** EWKB hex from `pg_attrdef` back to the EWKT form defaults are written in. */
+const postgisDefaultFromEWKB = (hex: string): string => {
+	const { srid, geometry, hasZ, hasM } = parseEWKB(hex);
+	return `'${geoJSONToEWKT(geometry, { srid, mOnly: hasM && !hasZ })}'`;
+};
+
+/** A GeoJSON geometry as TypeScript source: `{ type: 'Point', coordinates: [1, 2] }`. */
+const geoJSONToTs = (geometry: GeoJSONGeometry): string => {
+	const coordinates = (value: unknown): string =>
+		Array.isArray(value) ? `[${value.map(coordinates).join(', ')}]` : String(value);
+	if (geometry.type === 'GeometryCollection') {
+		return `{ type: 'GeometryCollection', geometries: [${geometry.geometries.map(geoJSONToTs).join(', ')}] }`;
+	}
+	return `{ type: '${geometry.type}', coordinates: ${coordinates(geometry.coordinates)} }`;
+};
+
+/**
+ * Turns an introspected EWKT default (`'SRID=4326;POINT(1 2)'`) into a GeoJSON
+ * literal for the schema file, or `null` when it cannot be expressed as one:
+ * the text is not EWKT, or its SRID is not the column's, which the literal
+ * could not carry.
+ */
+const postgisDefaultToTs = (value: string, columnSrid: number | undefined): string | null => {
+	if (!value.startsWith("'") || !value.endsWith("'")) return null;
+	try {
+		const { srid, geometry } = parseEWKT(trimChar(value, "'"));
+		if (srid !== undefined && srid !== 0 && srid !== columnSrid) return null;
+		return geoJSONToTs(geometry);
+	} catch {
+		return null;
+	}
+};
+
+/** Column options for the schema file: `{ type: 'MultiPolygon', srid: 4326 }`. */
+const postgisOptions = (type: string): { options: Record<string, unknown>; srid: number | undefined } => {
+	const parts = splitPostgisType(type);
+	const options: Record<string, unknown> = {};
+	if (!parts) return { options, srid: undefined };
+	const name = parts.name?.toLowerCase();
+	if (name !== undefined && name !== 'geometry') options['type'] = postgisTypeName(parts.name!);
+	let srid = parts.srid === 0 ? undefined : parts.srid;
+	if (parts.base === 'geography') {
+		// PostGIS reports 4326 for every geography subtype declared without an SRID.
+		if (name !== undefined && name !== 'geometry' && srid === 4326) srid = undefined;
+		if (srid !== undefined) options['srid'] = srid;
+		return { options, srid: srid ?? 4326 };
+	}
+	if (srid !== undefined) options['srid'] = srid;
+	return { options, srid };
+};
+
+/**
+ * Grammar shared by the `geometry` and `geography` column types. Defaults
+ * are written as EWKT, which PostGIS accepts as a literal, and read back
+ * from the EWKB hex that `pg_attrdef` stores through drizzle-orm's parser,
+ * so every subtype round-trips.
+ */
+const postgisGrammar = (base: 'geometry' | 'geography'): SqlType => ({
+	is: (type: string) => {
+		const parts = splitPostgisType(type);
+		return parts !== null && parts.base === base;
+	},
+	drizzleImport: () => base,
 	defaultFromDrizzle: (value, mode, config) => {
 		if (!value) return '';
-
-		const srid: number | undefined = config ? Number(config) : undefined;
-		let sridPrefix = srid ? `SRID=${srid};` : '';
-		if (mode === 'tuple') {
-			const v: number[] = value as number[];
-			return v.length > 0 ? `'${sridPrefix}POINT(${v[0]} ${v[1]})'` : '';
-		}
-
-		if (mode === 'object') {
-			const v: { x: number; y: number } = value as { x: number; y: number };
-			return Object.values(v).length > 0
-				? `'${sridPrefix}POINT(${v.x} ${v.y})'`
-				: '';
-		}
-
-		throw new Error('unknown geometry type');
+		return postgisDefaultValue(base, value, mode, config as PostgisColumnConfig | undefined);
 	},
-	defaultArrayFromDrizzle: function(
-		value: any[],
-		dimensions: number,
-		mode,
-		config,
-	): string {
-		// Parse to ARRAY[]
-		let res;
-		const srid: number | undefined = config ? Number(config) : undefined;
-		let sridPrefix = srid ? `SRID=${srid};` : '';
-		if (mode === 'tuple') {
-			res = stringifyTuplesArray(value, 'geometry-sql', (x: number[]) => {
-				const res = `${sridPrefix}POINT(${x[0]} ${x[1]})`;
-				return `'${res}'`;
-			});
-		} else if (mode === 'object') {
-			res = stringifyArray(value, 'geometry-sql', (x: { x: number; y: number }, _depth: number) => {
-				const res = `${sridPrefix}POINT(${x.x} ${x.y})`;
-				return `'${res}'`;
-			});
-		} else throw new Error('unknown geometry type');
-
-		return res;
+	defaultArrayFromDrizzle: (value, _dimensions, mode, config) => {
+		const item = (v: unknown) => postgisDefaultValue(base, v, mode, config as PostgisColumnConfig | undefined);
+		return mode === 'tuple'
+			? stringifyTuplesArray(value, 'geometry-sql', item)
+			: stringifyArray(value, 'geometry-sql', item);
 	},
-	defaultFromIntrospect: function(value: string): Column['default'] {
-		let def: string;
-
+	defaultFromIntrospect: (value) => {
 		try {
-			const { srid, point } = parseEWKB(trimChar(value, "'"));
-			let sridPrefix = srid ? `SRID=${srid};` : '';
-			def = `'${sridPrefix}POINT(${point[0]} ${point[1]})'`;
+			return postgisDefaultFromEWKB(trimChar(value, "'"));
 		} catch {
-			def = value;
+			return value;
 		}
-
-		return def;
 	},
-	defaultArrayFromIntrospect: function(value: string): Column['default'] {
-		// If {} array - parse to ARRAY[]
-
+	defaultArrayFromIntrospect: (value) => {
 		/**
 		 * Potential values here are:
 		 * DEFAULT {'POINT(10 10)'} -> '{010100000000000000000024400000000000002440}'::geometry(Point,435)[]
@@ -1429,102 +1569,61 @@ export const GeometryPoint: SqlType = {
 		 * DEFAULT ARRAY['POINT(10 10)']::geometry(point) -> ARRAY['010100000000000000000024400000000000002440'::geometry(Point)]
 		 * DEFAULT ARRAY['POINT(10 10)'::text]::geometry(point) -> ARRAY[('POINT(10 10)'::text)::geometry(Point)]
 		 */
-		let def = value;
-
-		if (def === "'{}'") return def;
+		if (value === "'{}'") return value;
 
 		try {
 			if (value.startsWith("'{") && value.endsWith("}'")) {
-				const parsed = parseArray(trimChar(value, "'"));
-
-				def = stringifyArray(parsed, 'geometry-sql', (v) => {
+				return stringifyArray(parseArray(trimChar(value, "'")), 'geometry-sql', (v) => {
 					try {
-						const { srid, point } = parseEWKB(v);
-						let sridPrefix = srid ? `SRID=${srid};` : '';
-						return `'${sridPrefix}POINT(${point[0]} ${point[1]})'`;
-					} catch {
-						return v;
-					}
-				});
-			} else {
-				const parsed = parseExpressionArray(value);
-				def = stringifyArray(parsed, 'geometry-sql', (v) => {
-					v = trimDefaultValueSuffix(trimDefaultValueSuffix(v).replace(/^\((.*)\)$/, '$1'));
-					try {
-						const { srid, point } = parseEWKB(trimChar(v, "'"));
-						let sridPrefix = srid ? `SRID=${srid};` : '';
-						return `'${sridPrefix}POINT(${point[0]} ${point[1]})'`;
+						return postgisDefaultFromEWKB(v);
 					} catch {
 						return v;
 					}
 				});
 			}
-		} catch {}
-
-		return def;
-	},
-	toTs: function(type: string, value: string | null): { options?: Record<string, unknown>; default: string } {
-		if (!value) return { default: '' };
-
-		const options: { srid?: number; type: 'point' } = { type: 'point' };
-
-		const sridOption = splitSqlType(type).options?.split(',')[1];
-		if (sridOption) options.srid = Number(sridOption);
-
-		if (!value.includes('POINT(')) {
-			return { default: `sql\`${value}\``, options };
-		}
-
-		const sridInDef = value.startsWith("'SRID=") ? Number(value.split('SRID=')[1].split(';')[0]) : undefined;
-		if (!sridOption && sridInDef) {
-			return { default: `sql\`${value}\``, options };
-		}
-
-		const [res1, res2] = value.split('POINT(')[1].split(')')[0].split(' ');
-
-		return { default: `[${res1},${res2}]`, options };
-	},
-	toArrayTs: function(type: string, value: string | null): { options?: Record<string, unknown>; default: string } {
-		if (!value) return { default: '' };
-
-		const options: { srid?: number; type: 'point' } = { type: 'point' };
-		const sridOption = splitSqlType(type).options?.split(',')[1];
-		if (sridOption) options.srid = Number(sridOption);
-
-		if (!value) return { default: '', options };
-
-		if (value === "'{}'") return { default: '[]', options };
-
-		let isDrizzleSql;
-		const srids: number[] = [];
-		try {
-			const trimmed = trimChar(trimChar(value, ['(', ')']), "'");
-			const res = parseExpressionArray(trimmed);
-
-			const def = stringifyArray(res, 'ts', (v) => {
-				if (v.includes('SRID=')) {
-					srids.push(Number(v.split('SRID=')[1].split(';')[0]));
+			return stringifyArray(parseExpressionArray(value), 'geometry-sql', (v) => {
+				v = trimDefaultValueSuffix(trimDefaultValueSuffix(v).replace(/^\((.*)\)$/, '$1'));
+				try {
+					return postgisDefaultFromEWKB(trimChar(v, "'"));
+				} catch {
+					return v;
 				}
-				const [res1, res2] = value.split('POINT(')[1].split(')')[0].split(' ');
-				if (!value.includes('POINT(')) isDrizzleSql = true;
-
-				return `[${res1}, ${res2}]`;
 			});
+		} catch {
+			return value;
+		}
+	},
+	toTs: (type, value) => {
+		const { options, srid } = postgisOptions(type);
+		if (!value) return { options, default: '' };
+		const literal = postgisDefaultToTs(value, srid);
+		return { options, default: literal ?? `sql\`${value}\`` };
+	},
+	toArrayTs: (type, value) => {
+		const { options, srid } = postgisOptions(type);
+		if (!value) return { options, default: '' };
+		if (value === "'{}'") return { options, default: '[]' };
 
-			if (!isDrizzleSql) isDrizzleSql = srids.some((it) => it !== srids[0]);
-			// if there is no srid in type and user defines srids in default
-			// we need to return point with srids
-			if (!isDrizzleSql && !sridOption && srids.length > 0) isDrizzleSql = true;
-
-			return {
-				options,
-				default: isDrizzleSql ? `sql\`${value}\`` : def,
-			};
+		try {
+			const parsed = parseExpressionArray(trimChar(trimChar(value, ['(', ')']), "'"));
+			let literal = true;
+			const def = stringifyArray(parsed, 'ts', (v) => {
+				const item = postgisDefaultToTs(v, srid);
+				if (item === null) literal = false;
+				return item ?? '';
+			});
+			return { options, default: literal ? def : `sql\`${value}\`` };
 		} catch {
 			return { options, default: `sql\`${value}\`` };
 		}
 	},
-};
+});
+
+/** PostGIS `geometry` in every subtype, with or without a typmod and SRID. */
+export const Geometry: SqlType = postgisGrammar('geometry');
+
+/** PostGIS `geography` in every subtype, with or without a typmod and SRID. */
+export const Geography: SqlType = postgisGrammar('geography');
 
 export const Enum: SqlType = {
 	is: (_type: string) => {
@@ -1706,7 +1805,8 @@ export const typeFor = (type: string, isEnum: boolean): SqlType => {
 	if (Point.is(type)) return Point;
 	if (Line.is(type)) return Line;
 	if (DateType.is(type)) return DateType;
-	if (GeometryPoint.is(type)) return GeometryPoint;
+	if (Geometry.is(type)) return Geometry;
+	if (Geography.is(type)) return Geography;
 	if (Serial.is(type)) return Serial;
 	if (SmallSerial.is(type)) return SmallSerial;
 	if (BigSerial.is(type)) return BigSerial;

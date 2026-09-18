@@ -32,6 +32,13 @@ import {
 	wrapRecord,
 } from './grammar';
 
+/**
+ * `geometry(MultiPolygon, 4326)` as PostGIS reports it becomes
+ * `geometry(multipolygon,4326)`, the form drizzle emits.
+ */
+const lowercasePostgisTypmod = (_match: string, base: string, typmod: string) =>
+	`${base.toLowerCase()}(${typmod.toLowerCase().replaceAll(/\s+/g, '')})`;
+
 // TODO: tables/schema/entities -> filter: (entity: {type: ... , metadata: ... }) => boolean;
 // TODO: since we by default only introspect public
 
@@ -733,7 +740,7 @@ export const fromDatabase = async (
 			// .replace(' with time zone', '')
 			// .replace("timestamp without time zone", "timestamp")
 			.replace(/\bcharacter\b/, 'char')
-			.replace(/\bgeometry\(Point\b/, 'geometry(point');
+			.replace(/^(geometry|geography)\(([^)]*)\)/i, lowercasePostgisTypmod);
 
 		columnTypeMapped = trimChar(columnTypeMapped, '"');
 
@@ -1092,7 +1099,7 @@ export const fromDatabase = async (
 			.replace(/ without time zone\b/, '')
 			// .replace("timestamp without time zone", "timestamp")
 			.replace(/\bcharacter\b/, 'char')
-			.replace('geometry(Point)', 'geometry(point)');
+			.replace(/^(geometry|geography)\(([^)]*)\)/i, lowercasePostgisTypmod);
 
 		columnTypeMapped += '[]'.repeat(it.dimensions);
 

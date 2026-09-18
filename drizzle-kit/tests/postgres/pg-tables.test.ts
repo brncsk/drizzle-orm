@@ -4,6 +4,7 @@ import {
 	boolean,
 	camelCase,
 	foreignKey,
+	geography,
 	geometry,
 	index,
 	integer,
@@ -217,19 +218,34 @@ test('add table #8: geometry types', async () => {
 		users: pgTable('users', {
 			geom: geometry('geom', { type: 'point' }).notNull(),
 			geom1: geometry('geom1').notNull(),
+			geom2: geometry('geom2', { srid: 4326 }),
+			geom3: geometry('geom3', { type: 'MultiPolygon', srid: 4326 }),
+			geom4: geometry('geom4', { type: 'LineStringZM' }).array(),
+			geom5: geometry('geom5', { type: 'Point', mode: 'xy', srid: 3857 }),
+			geom6: geometry('geom6', { type: 'CircularString' }),
+			geog: geography('geog'),
+			geog1: geography('geog1', { type: 'Point' }),
+			geog2: geography('geog2', { type: 'polygon', srid: 4269 }).array('[][]'),
 		}),
 	};
 
 	const { sqlStatements: st } = await diff({}, to, []);
 
-	// TODO: for now pglite does not support postgis extension, revise later https://github.com/electric-sql/pglite/issues/11
-	// const { sqlStatements: pst } = await push({ db, to });
-
 	const st0 = [
-		`CREATE TABLE "users" (\n\t"geom" geometry(point) NOT NULL,\n\t"geom1" geometry(point) NOT NULL\n);\n`,
+		`CREATE TABLE "users" (\n`
+		+ `\t"geom" geometry(point) NOT NULL,\n`
+		+ `\t"geom1" geometry NOT NULL,\n`
+		+ `\t"geom2" geometry(geometry,4326),\n`
+		+ `\t"geom3" geometry(multipolygon,4326),\n`
+		+ `\t"geom4" geometry(linestringzm)[],\n`
+		+ `\t"geom5" geometry(point,3857),\n`
+		+ `\t"geom6" geometry(circularstring),\n`
+		+ `\t"geog" geography,\n`
+		+ `\t"geog1" geography(point),\n`
+		+ `\t"geog2" geography(polygon,4269)[][]\n`
+		+ `);\n`,
 	];
 	expect(st).toStrictEqual(st0);
-	// expect(pst).toStrictEqual(st0);
 });
 
 /* unique inline */
