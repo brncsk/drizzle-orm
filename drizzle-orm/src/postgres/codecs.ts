@@ -21,6 +21,7 @@ import {
 	textToDate,
 	textToDateWithTz,
 } from '~/pg-core/codecs.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 import { sql } from '~/sql/sql.ts';
 
 const stringifyBigint = (value: bigint) => value.toString();
@@ -228,18 +229,26 @@ export const minipgCodecs = refineGenericPgCodecs({
 	regnamespace: { normalizeArray: (v) => parsePgArray(v), normalizeParamArray: (v) => makePgArray(v) },
 	regconfig: { normalizeArray: (v) => parsePgArray(v), normalizeParamArray: (v) => makePgArray(v) },
 	regdictionary: { normalizeArray: (v) => parsePgArray(v), normalizeParamArray: (v) => makePgArray(v) },
-	'geometry(point)': {
-		normalize: parseGeometryXY,
-		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryXY),
+	geometry: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geometry(point):tuple': {
+	'geometry:tuple': {
 		normalize: parseGeometryTuple,
 		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geography(point)': { normalizeParamArray: makeGeometryArray },
-	'geography(point):tuple': { normalizeParamArray: makeGeometryArray },
+	'geometry:xy': {
+		normalize: parseGeometryXY,
+		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryXY),
+		normalizeParamArray: makeGeometryArray,
+	},
+	geography: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
+		normalizeParamArray: makeGeometryArray,
+	},
 	box2d: { normalizeParamArray: (v) => makePgArray(v) },
 	box3d: { normalizeParamArray: (v) => makePgArray(v) },
 	raster: { normalizeParamArray: (v) => makePgArray(v) },
@@ -376,22 +385,34 @@ export const minipgShapeCodecs: PgCodecs = {
 	regnamespace: { normalizeParamArray: (v) => makePgArray(v) },
 	regconfig: { normalizeParamArray: (v) => makePgArray(v) },
 	regdictionary: { normalizeParamArray: (v) => makePgArray(v) },
-	'geometry(point)': {
+	geometry: {
 		normalizeParamArray: makeGeometryArray,
 		castInJson: castToText,
 		castArrayInJson: castToTextArr,
-		normalizeInJson: parseGeometryXY,
-		normalizeArrayInJson: arrayCompatNormalize(parseGeometryXY),
+		normalizeInJson: ewkbToGeoJSON,
+		normalizeArrayInJson: arrayCompatNormalize(ewkbToGeoJSON),
 	},
-	'geometry(point):tuple': {
+	'geometry:tuple': {
 		normalizeParamArray: makeGeometryArray,
 		castInJson: castToText,
 		castArrayInJson: castToTextArr,
 		normalizeInJson: parseGeometryTuple,
 		normalizeArrayInJson: arrayCompatNormalize(parseGeometryTuple),
 	},
-	'geography(point)': { normalizeParamArray: makeGeometryArray },
-	'geography(point):tuple': { normalizeParamArray: makeGeometryArray },
+	'geometry:xy': {
+		normalizeParamArray: makeGeometryArray,
+		castInJson: castToText,
+		castArrayInJson: castToTextArr,
+		normalizeInJson: parseGeometryXY,
+		normalizeArrayInJson: arrayCompatNormalize(parseGeometryXY),
+	},
+	geography: {
+		normalizeParamArray: makeGeometryArray,
+		castInJson: castToText,
+		castArrayInJson: castToTextArr,
+		normalizeInJson: ewkbToGeoJSON,
+		normalizeArrayInJson: arrayCompatNormalize(ewkbToGeoJSON),
+	},
 	box2d: { normalizeParamArray: (v) => makePgArray(v) },
 	box3d: { normalizeParamArray: (v) => makePgArray(v) },
 	raster: { normalizeParamArray: (v) => makePgArray(v) },

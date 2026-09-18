@@ -19,6 +19,7 @@ import {
 	textToDate,
 	textToDateWithTz,
 } from '~/pg-core/codecs.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 import { base64ToUint8Array } from '~/utils.ts';
 
 export const pgliteCodecs = refineGenericPgCodecs({
@@ -137,18 +138,32 @@ export const pgliteCodecs = refineGenericPgCodecs({
 		normalize: parsePointTuple,
 		normalizeArray: arrayCompatNormalize(parsePointTuple),
 	},
-	'geometry(point)': {
+	geometry: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
+		castParam: (name) => `${name}::geometry`,
+		castArrayParam: (name, _column, dimensions) => `${name}::geometry${'[]'.repeat(dimensions)}`,
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:tuple': {
+		normalize: parseGeometryTuple,
+		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
+		castParam: (name) => `${name}::geometry`,
+		castArrayParam: (name, _column, dimensions) => `${name}::geometry${'[]'.repeat(dimensions)}`,
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:xy': {
 		normalize: parseGeometryXY,
 		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryXY),
 		castParam: (name) => `${name}::geometry`,
 		castArrayParam: (name, _column, dimensions) => `${name}::geometry${'[]'.repeat(dimensions)}`,
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geometry(point):tuple': {
-		normalize: parseGeometryTuple,
-		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
-		castParam: (name) => `${name}::geometry`,
-		castArrayParam: (name, _column, dimensions) => `${name}::geometry${'[]'.repeat(dimensions)}`,
+	geography: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
+		castParam: (name) => `${name}::geography`,
+		castArrayParam: (name, _column, dimensions) => `${name}::geography${'[]'.repeat(dimensions)}`,
 		normalizeParamArray: makeGeometryArray,
 	},
 	halfvec: {

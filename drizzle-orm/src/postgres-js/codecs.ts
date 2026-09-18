@@ -16,6 +16,7 @@ import {
 	textToDate,
 	textToDateWithTz,
 } from '~/pg-core/codecs.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 
 export const postgresJsCodecs = refineGenericPgCodecs({
 	interval: { normalizeParamArray: (v) => makePgArray(v) },
@@ -58,8 +59,6 @@ export const postgresJsCodecs = refineGenericPgCodecs({
 	datemultirange: { normalizeParamArray: (v) => makePgArray(v) },
 	daterange: { normalizeParamArray: (v) => makePgArray(v) },
 	float8: { normalizeParamArray: (v) => makePgArray(v) },
-	'geography(point)': { normalizeParamArray: makeGeometryArray },
-	'geography(point):tuple': { normalizeParamArray: makeGeometryArray },
 	halfvec: {
 		normalize: parsePgVector,
 		normalizeArray: arrayCompatNormalize(parsePgVector),
@@ -115,16 +114,28 @@ export const postgresJsCodecs = refineGenericPgCodecs({
 		castArray: castToTextArr,
 		normalizeParamArray: (v) => makePgArray(v),
 	},
-	'geometry(point)': {
+	geometry: {
+		castArray: castToTextArr,
+		normalize: ewkbToGeoJSON,
+		normalizeArray: arrayCompatNormalize(ewkbToGeoJSON),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:tuple': {
+		castArray: castToTextArr,
+		normalize: parseGeometryTuple,
+		normalizeArray: arrayCompatNormalize(parseGeometryTuple),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:xy': {
 		castArray: castToTextArr,
 		normalize: parseGeometryXY,
 		normalizeArray: arrayCompatNormalize(parseGeometryXY),
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geometry(point):tuple': {
+	geography: {
 		castArray: castToTextArr,
-		normalize: parseGeometryTuple,
-		normalizeArray: arrayCompatNormalize(parseGeometryTuple),
+		normalize: ewkbToGeoJSON,
+		normalizeArray: arrayCompatNormalize(ewkbToGeoJSON),
 		normalizeParamArray: makeGeometryArray,
 	},
 	numeric: {
