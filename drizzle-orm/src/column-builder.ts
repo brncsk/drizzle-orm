@@ -49,6 +49,7 @@ export type ColumnDataNumberConstraint =
 export type ColumnDataObjectConstraint =
 	| 'buffer'
 	| 'date'
+	| 'geojson'
 	| 'geometry'
 	| 'json'
 	| 'line'
