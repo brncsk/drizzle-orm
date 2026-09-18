@@ -144,6 +144,70 @@ needed and the value reads well in query logs.
 `.array()` works as for every other column: `geometry({ type: 'Polygon' }).array()`
 reads and writes `Polygon[]`, and `.array('[][]')` gives `Polygon[][]`.
 
+### Relational queries
+
+`db.query` returns the same GeoJSON objects as `db.select`, at the root and
+inside `with`. Nested rows travel through `row_to_json`, and PostGIS has an
+implicit `geometry -> json` cast that would turn the value into GeoJSON
+without the client seeing the EWKB; drizzle casts the column to text inside
+the JSON selection so that every driver decodes it the same way.
+
+A `sql\`ST_AsGeoJSON(...)::jsonb\`` expression in `extras` keeps working and
+returns a plain JSON value. An extra cannot share its name with a column
+of the same table.
+
+## Codecs
+
+Decoding is done by the codec system, under four keys:
+
+| Key | Column | Value |
+| --- | --- | --- |
+| `geometry` | `geometry()` in `geojson` mode | GeoJSON |
+| `geometry:tuple` | `geometry({ type: 'Point', mode: 'tuple' })` | `[x, y]` |
+| `geometry:xy` | `geometry({ type: 'Point', mode: 'xy' })` | `{ x, y }` |
+| `geography` | `geography()` | GeoJSON |
+
+The keys carry no typmod because the decoder is the same for every
+subtype. `geometry(<typmod>)`, `geometry(<typmod>):tuple`,
+`geometry(<typmod>):xy` and `geography(<typmod>)` are accepted as aliases
+in any casing, with or without an SRID, so a `customType` can name the
+PostGIS type it wraps:
+
+```ts
+const footprint = customType<{ data: MultiPolygon; driverData: string }>({
+	dataType: () => 'geometry(multipolygon,4326)',
+	codec: 'geometry(multipolygon)', // or simply 'geometry'
+	toDriver: (value) => geoJSONToEWKT(value, { srid: 4326 }),
+});
+```
+
+A column type without `codec` gets no decoding: its `fromDriver` receives
+the hex EWKB text.
+
+To decode differently, override the codec for the driver in use. This
+example lets PostGIS produce the GeoJSON in the query instead of parsing
+EWKB on the client (the `json` result needs no client-side step, so the
+`normalize` hooks become identities):
+
+```ts
+import { refineCodecs, sql } from 'drizzle-orm';
+import { drizzle, nodePgCodecs } from 'drizzle-orm/node-postgres';
+
+const asGeoJSON = (name: SQLChunk) => sql`ST_AsGeoJSON(${name})::json`;
+const identity = (value: unknown) => value;
+
+const db = drizzle(client, {
+	codecs: refineCodecs(nodePgCodecs, {
+		geometry: {
+			cast: asGeoJSON,
+			castInJson: asGeoJSON,
+			normalize: identity,
+			normalizeInJson: identity,
+		},
+	}),
+});
+```
+
 ## drizzle-kit
 
 `generate`, `push` and `pull` understand every `geometry` and `geography`
@@ -186,3 +250,6 @@ Upgrading a schema that used the point-only `geometry()`:
 - `bbox` members are not produced on read and are ignored on write.
 - Foreign members other than `type`, `coordinates`, `geometries` and `bbox`
   are ignored on write.
+- `drizzle-seed` generates `[x, y]` and `{ x, y }` points only; it does not
+  produce GeoJSON values for the default mode yet.
+- CockroachDB keeps its point-only `geometry()`.
