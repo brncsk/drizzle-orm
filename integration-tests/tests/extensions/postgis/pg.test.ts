@@ -1,9 +1,10 @@
 import { defineRelations, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { bigserial, customType, geometry, integer, line, pgTable, point } from 'drizzle-orm/pg-core';
+import { bigserial, customType, geography, geometry, integer, line, pgTable, point } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, expect, expectTypeOf, test } from 'vitest';
+import { defineGeoJSONTests } from './geojson-suite';
 
 const { Client } = pg;
 
@@ -18,9 +19,11 @@ const items = pgTable('items', {
 	pointObj: point('point_xy', { mode: 'xy' }),
 	line: line('line'),
 	lineObj: line('line_abc', { mode: 'abc' }),
-	geo: geometry('geo', { type: 'point' }),
+	geo: geometry('geo', { type: 'point', mode: 'tuple' }),
 	geoObj: geometry('geo_obj', { type: 'point', mode: 'xy' }),
 	geoSrid: geometry('geo_options', { type: 'point', mode: 'xy', srid: 4000 }),
+	footprint: geometry('footprint', { type: 'MultiPolygon', srid: 4326 }),
+	place: geography('place', { type: 'Point' }),
 });
 
 const relations = defineRelations({ items }, (r) => ({
@@ -59,7 +62,9 @@ beforeEach(async () => {
 		          "line_abc" line,
 				  "geo" geometry(point),
 				  "geo_obj" geometry(point),
-				  "geo_options" geometry(point,4000)
+				  "geo_options" geometry(point,4000),
+				  "footprint" geometry(multipolygon,4326),
+				  "place" geography(point)
 		      );
 	`);
 });
@@ -73,6 +78,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]).returning();
 
 	const response = await db.select().from(items);
@@ -86,6 +93,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]);
 
 	expect(response).toStrictEqual([{
@@ -97,6 +106,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]);
 });
 
@@ -141,6 +152,8 @@ test('RQBv2', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]).returning();
 
 	const rawResponse = await db.select().from(items);
@@ -243,3 +256,5 @@ test('No wrong codec autoresolution', async () => {
 		polygon: [[[30.0, 50.0], [30.1, 50.0], [30.1, 50.1], [30.0, 50.1], [30.0, 50.0]]],
 	}]);
 });
+
+defineGeoJSONTests(() => db);
