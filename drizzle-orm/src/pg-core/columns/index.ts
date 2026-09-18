@@ -19,6 +19,8 @@ export * from './macaddr.ts';
 export * from './macaddr8.ts';
 export * from './numeric.ts';
 export * from './point.ts';
+export * from './postgis_extension/ewkb.ts';
+export * from './postgis_extension/ewkt.ts';
 export * from './postgis_extension/geojson.ts';
 export * from './postgis_extension/geometry.ts';
 export * from './real.ts';

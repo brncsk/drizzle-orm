@@ -9,7 +9,7 @@ import {
 import { type Name, sql, type SQLChunk } from '~/sql/sql.ts';
 import type { PartialWithUndefined } from '~/utils.ts';
 import { makePgArray, parsePgArray } from './array.ts';
-import { parseEWKB } from './columns/postgis_extension/utils.ts';
+import { parseEWKB } from './columns/postgis_extension/ewkb.ts';
 
 export type PostGISType =
 	| 'geometry(point)'
@@ -1042,11 +1042,24 @@ export const parsePointXY = (v: string): { x: number; y: number } => {
 	return { x: Number.parseFloat(x!), y: Number.parseFloat(y!) };
 };
 
-export const parseGeometryTuple = (v: string): [number, number] => parseEWKB(v).point;
+/**
+ * Reads the `[x, y]` of an EWKB point. `POINT EMPTY` gives `[NaN, NaN]`.
+ * Throws for any other geometry type: the tuple and `{ x, y }` modes exist
+ * for points only.
+ */
+const parseEWKBPoint = (v: string): [number, number] => {
+	const { geometry } = parseEWKB(v);
+	if (geometry.type !== 'Point') {
+		throw new Error(`Expected a Point geometry, got ${geometry.type}`);
+	}
+	return [geometry.coordinates[0] ?? Number.NaN, geometry.coordinates[1] ?? Number.NaN];
+};
+
+export const parseGeometryTuple = (v: string): [number, number] => parseEWKBPoint(v);
 
 export const parseGeometryXY = (v: string): { x: number; y: number } => {
-	const parsed = parseEWKB(v);
-	return { x: parsed.point[0], y: parsed.point[1] };
+	const [x, y] = parseEWKBPoint(v);
+	return { x, y };
 };
 
 export const textToDate = (v: string): Date => new Date(v);
