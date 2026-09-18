@@ -295,6 +295,7 @@
 		"@tursodatabase/serverless": "1.4.0",
 		"@tursodatabase/sync": "0.7.1",
 		"@types/better-sqlite3": "^9.6.0",
+		"@types/geojson": "^7946.0.16",
 		"@types/node": "^25.4.0",
 		"@types/pg": "^8.10.1",
 		"@types/react": "^18.2.45",
