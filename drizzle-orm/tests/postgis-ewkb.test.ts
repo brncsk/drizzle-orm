@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ewkbToGeoJSON, parseEWKB } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 import { geoJSONToEWKT, parseEWKT } from '~/pg-core/columns/postgis_extension/ewkt.ts';
-import type { Geometry } from '~/pg-core/columns/postgis_extension/geojson.ts';
+import type { Geometry, Point } from '~/pg-core/columns/postgis_extension/geojson.ts';
 
 /**
  * Fixture vectors produced by PostGIS 3.4 with:
@@ -377,7 +377,7 @@ describe('parseEWKB', () => {
 			srid: undefined,
 			hasZ: false,
 			hasM: false,
-			geometry: { type: 'MultiPoint', coordinates: [parent.geometry.coordinates] },
+			geometry: { type: 'MultiPoint', coordinates: [(parent.geometry as Point).coordinates] },
 		});
 	});
 

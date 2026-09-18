@@ -8,6 +8,7 @@ import {
 	cidr,
 	date,
 	doublePrecision,
+	geography,
 	geometry,
 	halfvec,
 	inet,
@@ -21,6 +22,7 @@ import {
 	numeric,
 	pgEnum,
 	point,
+	type Polygon,
 	real,
 	serial,
 	smallint,
@@ -1637,6 +1639,163 @@ test('geometry + geometry arrays', async () => {
 	// expect.soft(res14).toStrictEqual([]);
 	expect.soft(res15).toStrictEqual([]);
 	expect.soft(res16).toStrictEqual([]);
+
+	await postgisDb.clear();
+	await postgisDb.close();
+});
+
+test('geometry + geography GeoJSON defaults', async () => {
+	const postgisDb = await preparePostgisTestDatabase();
+	const square: Polygon = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+
+	const res1 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'Point', srid: 4326 }).default({ type: 'Point', coordinates: [30.5234, 50.4501] }),
+		`'SRID=4326;POINT(30.5234 50.4501)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res2 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'MultiPolygon', srid: 4326 }).default({
+			type: 'MultiPolygon',
+			coordinates: [square.coordinates, [[[10, 10], [11, 10], [11, 11], [10, 10]]]],
+		}),
+		`'SRID=4326;MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((10 10,11 10,11 11,10 10)))'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res3 = await diffDefault(
+		postgisDb,
+		geometry().default({ type: 'LineString', coordinates: [[0, 0], [1, 1]] }),
+		`'LINESTRING(0 0,1 1)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res4 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'PointM' }).default({ type: 'Point', coordinates: [1, 2, 3] }),
+		`'POINTM(1 2 3)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res5 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'GeometryCollectionZ', srid: 3857 }).default({
+			type: 'GeometryCollection',
+			geometries: [{ type: 'Point', coordinates: [1, 2, 3] }, {
+				type: 'LineString',
+				coordinates: [[0, 0, 0], [1, 1, 1]],
+			}],
+		}),
+		`'SRID=3857;GEOMETRYCOLLECTION(POINT(1 2 3),LINESTRING(0 0 0,1 1 1))'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res6 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'Polygon', srid: 4326 }).array().default([square]),
+		`ARRAY['SRID=4326;POLYGON((0 0,1 0,1 1,0 1,0 0))']::geometry(polygon,4326)[]`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res7 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'Point' }).array('[][]').default([
+			[{ type: 'Point', coordinates: [1, 2] }],
+			[{ type: 'Point', coordinates: [3, 4] }],
+		]),
+		`ARRAY[ARRAY['POINT(1 2)'],ARRAY['POINT(3 4)']]::geometry(point)[]`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res8 = await diffDefault(
+		postgisDb,
+		geometry({ type: 'Point' }).array().default([]),
+		`'{}'::geometry(point)[]`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res9 = await diffDefault(
+		postgisDb,
+		geography({ type: 'Point' }).default({ type: 'Point', coordinates: [19.0402, 47.4979] }),
+		`'SRID=4326;POINT(19.0402 47.4979)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res10 = await diffDefault(
+		postgisDb,
+		geography().default({ type: 'Point', coordinates: [19.0402, 47.4979] }),
+		`'SRID=4326;POINT(19.0402 47.4979)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	const res11 = await diffDefault(
+		postgisDb,
+		geography({ type: 'Polygon', srid: 4269 }).array().default([square]),
+		`ARRAY['SRID=4269;POLYGON((0 0,1 0,1 1,0 1,0 0))']::geography(polygon,4269)[]`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	// A default whose SRID the column cannot express stays a `sql` default in the schema file.
+	const res12 = await diffDefault(
+		postgisDb,
+		geometry().default(sql`'SRID=3857;POINT(7 8)'`),
+		`'SRID=3857;POINT(7 8)'`,
+		undefined,
+		undefined,
+		['table'],
+		['public'],
+	);
+
+	expect.soft(res1).toStrictEqual([]);
+	expect.soft(res2).toStrictEqual([]);
+	expect.soft(res3).toStrictEqual([]);
+	expect.soft(res4).toStrictEqual([]);
+	expect.soft(res5).toStrictEqual([]);
+	expect.soft(res6).toStrictEqual([]);
+	expect.soft(res7).toStrictEqual([]);
+	expect.soft(res8).toStrictEqual([]);
+	expect.soft(res9).toStrictEqual([]);
+	expect.soft(res10).toStrictEqual([]);
+	expect.soft(res11).toStrictEqual([]);
+	expect.soft(res12).toStrictEqual([]);
+
+	await postgisDb.clear();
+	await postgisDb.close();
 });
 
 test('inet + inet arrays', async () => {
