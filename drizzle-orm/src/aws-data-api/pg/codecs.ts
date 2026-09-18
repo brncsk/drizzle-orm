@@ -19,6 +19,7 @@ import {
 	textToDate,
 	textToDateWithTz,
 } from '~/pg-core/codecs.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 
 const byteaFromBlob = (v: Uint8Array | Buffer): Buffer => Buffer.from(v);
 const byteaFromPgHex = (v: string): Buffer => Buffer.from(v.slice(2), 'hex');
@@ -57,18 +58,32 @@ export const awsDataApiPgCodecs = refineGenericPgCodecs({
 		castArrayParam: (name, column, dim) => `${name}::bit(${column.length})${'[]'.repeat(dim)}`,
 		normalizeParamArray: (v) => makePgArray(v),
 	},
-	'geometry(point)': {
+	geometry: {
+		castParam: (name) => `${name}::geometry`,
+		castArrayParam: (name, _column, dim) => `${name}::geometry${'[]'.repeat(dim)}`,
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:tuple': {
+		castParam: (name) => `${name}::geometry`,
+		castArrayParam: (name, _column, dim) => `${name}::geometry${'[]'.repeat(dim)}`,
+		normalize: parseGeometryTuple,
+		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:xy': {
 		castParam: (name) => `${name}::geometry`,
 		castArrayParam: (name, _column, dim) => `${name}::geometry${'[]'.repeat(dim)}`,
 		normalize: parseGeometryXY,
 		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryXY),
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geometry(point):tuple': {
-		castParam: (name) => `${name}::geometry`,
-		castArrayParam: (name, _column, dim) => `${name}::geometry${'[]'.repeat(dim)}`,
-		normalize: parseGeometryTuple,
-		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
+	geography: {
+		castParam: (name) => `${name}::geography`,
+		castArrayParam: (name, _column, dim) => `${name}::geography${'[]'.repeat(dim)}`,
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
 		normalizeParamArray: makeGeometryArray,
 	},
 	interval: {
@@ -208,16 +223,6 @@ export const awsDataApiPgCodecs = refineGenericPgCodecs({
 		castParam: (name) => `${name}::double precision`,
 		castArrayParam: (name, _column, dim) => `${name}::double precision${'[]'.repeat(dim)}`,
 		normalizeParamArray: (v) => makePgArray(v),
-	},
-	'geography(point)': {
-		castParam: (name) => `${name}::geography`,
-		castArrayParam: (name, _column, dim) => `${name}::geography${'[]'.repeat(dim)}`,
-		normalizeParamArray: makeGeometryArray,
-	},
-	'geography(point):tuple': {
-		castParam: (name) => `${name}::geography`,
-		castArrayParam: (name, _column, dim) => `${name}::geography${'[]'.repeat(dim)}`,
-		normalizeParamArray: makeGeometryArray,
 	},
 	int4multirange: {
 		castParam: (name) => `${name}::int4multirange`,

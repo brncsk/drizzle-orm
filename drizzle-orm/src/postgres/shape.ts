@@ -2,6 +2,7 @@ import {
 	Collect,
 	CollectNullable,
 	type CustomMarker,
+	defineType,
 	Json,
 	JsonArray,
 	type JsonMarker,
@@ -22,6 +23,7 @@ import { is } from '~/entity.ts';
 import type { SelectedFieldsOrdered } from '~/operations.ts';
 import type { PostgresType } from '~/pg-core/codecs.ts';
 import type { PgColumn } from '~/pg-core/columns/common.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 import type { PreparedQuerySelection } from '~/pg-core/dialect.ts';
 import { type DriverValueDecoder, noopDecoder } from '~/sql/sql.ts';
 import { Table } from '~/table.ts';
@@ -75,15 +77,30 @@ const SHAPE_TYPES: Partial<Record<PostgresType, ShapeType>> = {
 	sparsevec: ['sparsevec', 'string'],
 };
 
+/**
+ * PostGIS `geometry` and `geography` decoded with drizzle's own EWKB parser instead of minipg's
+ * `geojson` target, so minipg returns the same GeoJSON as every other driver: no `srid` member,
+ * `POINT EMPTY` as `[]`, M ordinates kept, and the same error for curve types.
+ */
+const drizzleGeometry = defineType('geometry', { ascii: true, delim: ':', targets: { geojson: ewkbToGeoJSON } });
+
 /** Types minipg decodes only through a registry marker, which carries no spec string to name it by. */
 const CUSTOM_MARKERS: Partial<Record<PostgresType, { scalar: CustomMarker; array: CustomMarker }>> = {
-	'geometry(point)': {
+	geometry: {
+		scalar: drizzleGeometry('geojson'),
+		array: drizzleGeometry.array('geojson'),
+	},
+	'geometry:xy': {
 		scalar: pgGeometry('xy'),
 		array: pgGeometry.array('xy'),
 	},
-	'geometry(point):tuple': {
+	'geometry:tuple': {
 		scalar: pgGeometry('tuple'),
 		array: pgGeometry.array('tuple'),
+	},
+	geography: {
+		scalar: drizzleGeometry('geojson'),
+		array: drizzleGeometry.array('geojson'),
 	},
 };
 

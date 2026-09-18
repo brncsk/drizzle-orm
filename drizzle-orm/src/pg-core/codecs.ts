@@ -9,79 +9,57 @@ import {
 import { type Name, sql, type SQLChunk } from '~/sql/sql.ts';
 import type { PartialWithUndefined } from '~/utils.ts';
 import { makePgArray, parsePgArray } from './array.ts';
-import { parseEWKB } from './columns/postgis_extension/ewkb.ts';
+import { ewkbToGeoJSON, parseEWKB } from './columns/postgis_extension/ewkb.ts';
 
+/**
+ * Codec keys of the PostGIS column types.
+ *
+ * `geometry` and `geography` decode to GeoJSON. `geometry:tuple` and
+ * `geometry:xy` are the point-only `[x, y]` and `{ x, y }` shapes. The
+ * key does not carry the typmod (`geometry(multipolygon,4326)`), because
+ * the codec does not depend on it; see {@link PostGISAliasType}.
+ */
 export type PostGISType =
-	| 'geometry(point)'
-	| 'geometry(pointz)'
-	| 'geometry(pointm)'
-	| 'geometry(pointzm)'
-	| 'geometry(linestring)'
-	| 'geometry(linestringz)'
-	| 'geometry(linestringm)'
-	| 'geometry(linestringzm)'
-	| 'geometry(polygon)'
-	| 'geometry(polygonz)'
-	| 'geometry(polygonm)'
-	| 'geometry(polygonzm)'
-	| 'geometry(multipoint)'
-	| 'geometry(multipointz)'
-	| 'geometry(multipointm)'
-	| 'geometry(multipointzm)'
-	| 'geometry(multilinestring)'
-	| 'geometry(multilinestringz)'
-	| 'geometry(multilinestringm)'
-	| 'geometry(multilinestringzm)'
-	| 'geometry(multipolygon)'
-	| 'geometry(multipolygonz)'
-	| 'geometry(multipolygonm)'
-	| 'geometry(multipolygonzm)'
-	| 'geometry(geometrycollection)'
-	| 'geometry(geometrycollectionz)'
-	| 'geometry(geometrycollectionm)'
-	| 'geometry(geometrycollectionzm)'
-	| 'geometry(circularstring)'
-	| 'geometry(circularstringz)'
-	| 'geometry(circularstringm)'
-	| 'geometry(circularstringzm)'
-	| 'geometry(compoundcurve)'
-	| 'geometry(compoundcurvez)'
-	| 'geometry(compoundcurvem)'
-	| 'geometry(compoundcurvezm)'
-	| 'geometry(curvepolygon)'
-	| 'geometry(curvepolygonz)'
-	| 'geometry(curvepolygonm)'
-	| 'geometry(curvepolygonzm)'
-	| 'geometry(multicurve)'
-	| 'geometry(multicurvez)'
-	| 'geometry(multicurvem)'
-	| 'geometry(multicurvezm)'
-	| 'geometry(multisurface)'
-	| 'geometry(multisurfacez)'
-	| 'geometry(multisurfacem)'
-	| 'geometry(multisurfacezm)'
-	| 'geometry(polyhedralsurface)'
-	| 'geometry(polyhedralsurfacez)'
-	| 'geometry(polyhedralsurfacem)'
-	| 'geometry(polyhedralsurfacezm)'
-	| 'geometry(tin)'
-	| 'geometry(tinz)'
-	| 'geometry(tinm)'
-	| 'geometry(tinzm)'
-	| 'geometry(triangle)'
-	| 'geometry(trianglez)'
-	| 'geometry(trianglem)'
-	| 'geometry(trianglezm)'
-	| 'geography(point)'
-	| 'geography(linestring)'
-	| 'geography(polygon)'
-	| 'geography(multipoint)'
-	| 'geography(multilinestring)'
-	| 'geography(multipolygon)'
-	| 'geography(geometrycollection)'
+	| 'geometry'
+	| 'geometry:tuple'
+	| 'geometry:xy'
+	| 'geography'
 	| 'box2d'
 	| 'box3d'
 	| 'raster';
+
+type PostGISTypmodName =
+	| 'geometry'
+	| 'point'
+	| 'linestring'
+	| 'polygon'
+	| 'multipoint'
+	| 'multilinestring'
+	| 'multipolygon'
+	| 'geometrycollection'
+	| 'circularstring'
+	| 'compoundcurve'
+	| 'curvepolygon'
+	| 'multicurve'
+	| 'multisurface'
+	| 'polyhedralsurface'
+	| 'tin'
+	| 'triangle';
+
+type PostGISTypmod = `${PostGISTypmodName}${'' | 'z' | 'm' | 'zm'}`;
+
+/**
+ * Codec key aliases that name a PostGIS typmod, for `customType({ codec })`.
+ * `geometry(<typmod>)` and `geography(<typmod>)` resolve to the GeoJSON
+ * codecs; the `:tuple` and `:xy` suffixes select the point-only shapes.
+ * {@link resolvePgTypeAlias} also accepts an SRID inside the parentheses
+ * and any casing.
+ */
+export type PostGISAliasType =
+	| `geometry(${PostGISTypmod})`
+	| `geometry(${PostGISTypmod}):tuple`
+	| `geometry(${PostGISTypmod}):xy`
+	| `geography(${PostGISTypmod})`;
 
 export type PostgresType =
 	// Numeric
@@ -177,14 +155,13 @@ export type PostgresType =
 	| 'regdictionary'
 	// PostGIS
 	| PostGISType
-	| `${PostGISType}:tuple`
 	// pgvector
 	| 'halfvec'
 	| 'sparsevec'
 	| 'vector';
 
 // Some originals were swapped with aliases for simpler keys
-export type PostgresAliasType =
+export type PostgresStaticAliasType =
 	// Numeric
 	| 'int2' // smallint
 	| 'integer' // int
@@ -210,11 +187,13 @@ export type PostgresAliasType =
 	// Bit String
 	| 'bit varying'; // varbit;
 
+export type PostgresAliasType = PostgresStaticAliasType | PostGISAliasType;
+
 export type PostgresColumnType =
 	| PostgresType
 	| PostgresAliasType;
 
-const PG_ALIAS_TO_TYPE_MAP: Record<PostgresAliasType, PostgresType> = {
+const PG_ALIAS_TO_TYPE_MAP: Record<PostgresStaticAliasType, PostgresType> = {
 	int2: 'smallint',
 	integer: 'int',
 	int4: 'int',
@@ -236,8 +215,29 @@ const PG_ALIAS_TO_TYPE_MAP: Record<PostgresAliasType, PostgresType> = {
 	'bit varying': 'varbit',
 };
 
-export function resolvePgTypeAlias(type: string) {
-	return (PG_ALIAS_TO_TYPE_MAP as Record<string, PostgresType | undefined>)[type] ?? type;
+/**
+ * `geometry(<typmod>)[:<mode>]` and `geography(<typmod>)` in any casing.
+ * The typmod (and an SRID after it) is ignored: the codec is the same for
+ * every subtype.
+ */
+const POSTGIS_ALIAS = /^(geometry|geography)(?:\(.*\))?(?::(tuple|xy))?$/i;
+
+/**
+ * Maps a codec key alias to its canonical key. Unknown keys are returned
+ * as they are; the codec lookup then finds no codec, which is supported.
+ */
+export function resolvePgTypeAlias(type: string): string {
+	const mapped = (PG_ALIAS_TO_TYPE_MAP as Record<string, PostgresType | undefined>)[type];
+	if (mapped) return mapped;
+
+	const postgis = POSTGIS_ALIAS.exec(type);
+	if (postgis) {
+		const base = postgis[1]!.toLowerCase();
+		const mode = postgis[2]?.toLowerCase();
+		return mode ? `${base}:${mode}` : base;
+	}
+
+	return type;
 }
 
 // Cross-type unions mutate data types
@@ -672,6 +672,24 @@ export const unionsTypeTable = {
 	'line:tuple': {
 		line: 'line:tuple',
 		'line:tuple': 'line:tuple',
+	},
+	geometry: {
+		geometry: 'geometry',
+		'geometry:tuple': 'geometry',
+		'geometry:xy': 'geometry',
+	},
+	'geometry:tuple': {
+		geometry: 'geometry:tuple',
+		'geometry:tuple': 'geometry:tuple',
+		'geometry:xy': 'geometry:tuple',
+	},
+	'geometry:xy': {
+		geometry: 'geometry:xy',
+		'geometry:tuple': 'geometry:xy',
+		'geometry:xy': 'geometry:xy',
+	},
+	geography: {
+		geography: 'geography',
 	},
 	lseg: {
 		lseg: 'lseg',
@@ -1111,17 +1129,31 @@ export const genericPgCodecs = {
 		normalizeArrayInJson: arrayCompatNormalize(textToDate),
 	},
 	'date:string': {},
-	'geometry(point)': {
+	// PostGIS registers an implicit `geometry -> json` cast, so inside
+	// `row_to_json` the value must be cast to text to arrive as hex EWKB.
+	geometry: {
+		castInJson: castToText,
+		castArrayInJson: castToTextArr,
+		normalizeInJson: ewkbToGeoJSON,
+		normalizeArrayInJson: arrayCompatNormalize(ewkbToGeoJSON),
+	},
+	'geometry:tuple': {
+		castInJson: castToText,
+		castArrayInJson: castToTextArr,
+		normalizeInJson: parseGeometryTuple,
+		normalizeArrayInJson: arrayCompatNormalize(parseGeometryTuple),
+	},
+	'geometry:xy': {
 		castInJson: castToText,
 		castArrayInJson: castToTextArr,
 		normalizeInJson: parseGeometryXY,
 		normalizeArrayInJson: arrayCompatNormalize(parseGeometryXY),
 	},
-	'geometry(point):tuple': {
+	geography: {
 		castInJson: castToText,
 		castArrayInJson: castToTextArr,
-		normalizeInJson: parseGeometryTuple,
-		normalizeArrayInJson: arrayCompatNormalize(parseGeometryTuple),
+		normalizeInJson: ewkbToGeoJSON,
+		normalizeArrayInJson: arrayCompatNormalize(ewkbToGeoJSON),
 	},
 	interval: {
 		castArrayInJson: castToTextArr,

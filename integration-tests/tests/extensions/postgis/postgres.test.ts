@@ -158,7 +158,7 @@ test('a custom column over a geometry codec decodes on top of the parsed geometr
 
 	const labelled = customType<{ data: string; driverData: { x: number; y: number } }>({
 		dataType: () => 'geometry(point)',
-		codec: 'geometry(point)',
+		codec: 'geometry(point):xy',
 		toDriver: (value) => sql`ST_GeomFromText(${`POINT(${value})`})`,
 		fromDriver: (value) => `${value.x}/${value.y}`,
 	});

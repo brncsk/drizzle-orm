@@ -18,6 +18,7 @@ import {
 	textToDate,
 	textToDateWithTz,
 } from '~/pg-core/codecs.ts';
+import { ewkbToGeoJSON } from '~/pg-core/columns/postgis_extension/ewkb.ts';
 
 export const nodePgCodecs = refineGenericPgCodecs({
 	bigint: {
@@ -76,14 +77,24 @@ export const nodePgCodecs = refineGenericPgCodecs({
 	'timestamptz:string': {
 		castArray: castToTextArr,
 	},
-	'geometry(point)': {
+	geometry: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:tuple': {
+		normalize: parseGeometryTuple,
+		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
+		normalizeParamArray: makeGeometryArray,
+	},
+	'geometry:xy': {
 		normalize: parseGeometryXY,
 		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryXY),
 		normalizeParamArray: makeGeometryArray,
 	},
-	'geometry(point):tuple': {
-		normalize: parseGeometryTuple,
-		normalizeArray: parseGeometryArrayAndNormalize(parseGeometryTuple),
+	geography: {
+		normalize: ewkbToGeoJSON,
+		normalizeArray: parseGeometryArrayAndNormalize(ewkbToGeoJSON),
 		normalizeParamArray: makeGeometryArray,
 	},
 	interval: {
