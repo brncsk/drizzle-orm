@@ -3,7 +3,18 @@ import { beforeAll, beforeEach, expect, test } from 'bun:test';
 import { defineRelations, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sql';
 import type { BunSQLDatabase } from 'drizzle-orm/bun-sql/postgres';
-import { bigserial, customType, geometry, integer, line, pgTable, point } from 'drizzle-orm/pg-core';
+import {
+	bigserial,
+	customType,
+	geography,
+	geometry,
+	integer,
+	line,
+	pgTable,
+	type Point,
+	point,
+	type Polygon,
+} from 'drizzle-orm/pg-core';
 
 const items = pgTable('items', {
 	id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -11,9 +22,11 @@ const items = pgTable('items', {
 	pointObj: point('point_xy', { mode: 'xy' }),
 	line: line('line'),
 	lineObj: line('line_abc', { mode: 'abc' }),
-	geo: geometry('geo', { type: 'point' }),
+	geo: geometry('geo', { type: 'point', mode: 'tuple' }),
 	geoObj: geometry('geo_obj', { type: 'point', mode: 'xy' }),
 	geoSrid: geometry('geo_options', { type: 'point', mode: 'xy', srid: 4000 }),
+	footprint: geometry('footprint', { type: 'MultiPolygon', srid: 4326 }),
+	place: geography('place', { type: 'Point' }),
 });
 
 const relations = defineRelations({ items }, (r) => ({
@@ -54,7 +67,9 @@ beforeEach(async () => {
 			"line_abc" line,
 			"geo" geometry(point),
 			"geo_obj" geometry(point),
-			"geo_options" geometry(point,4000)
+			"geo_options" geometry(point,4000),
+			"footprint" geometry(multipolygon,4326),
+			"place" geography(point)
 		);
 	`);
 });
@@ -68,6 +83,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]).returning();
 
 	const response = await db.select().from(items);
@@ -81,6 +98,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]);
 
 	expect(response).toStrictEqual([{
@@ -92,6 +111,8 @@ test('insert + select', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]);
 });
 
@@ -109,6 +130,8 @@ test('null geometries survive driver-side parsing', async () => {
 		geo: null,
 		geoObj: null,
 		geoSrid: null,
+		footprint: null,
+		place: null,
 	}]);
 });
 
@@ -176,6 +199,8 @@ test('RQBv2', async () => {
 		geo: [1, 2],
 		geoObj: { x: 1, y: 2 },
 		geoSrid: { x: 1, y: 2 },
+		footprint: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] },
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] },
 	}]).returning();
 
 	const rawResponse = await db.select().from(items);
@@ -261,4 +286,44 @@ test('No wrong codec autoresolution', async () => {
 		id: 1,
 		polygon: [[[30.0, 50.0], [30.1, 50.0], [30.1, 50.1], [30.0, 50.1], [30.0, 50.0]]],
 	}]);
+});
+
+test('GeoJSON columns round trip, also inside arrays and through `mapWith`', async () => {
+	const square: Polygon = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+	const shapes = pgTable('geo_shapes', {
+		id: integer('id').primaryKey(),
+		polygon: geometry('polygon', { type: 'Polygon', srid: 4326 }),
+		parts: geometry('parts', { type: 'Polygon', srid: 4326 }).array(),
+		place: geography('place', { type: 'Point' }),
+	});
+	await db.execute(sql`drop table if exists geo_shapes cascade`);
+	await db.execute(sql`
+		CREATE TABLE geo_shapes (
+			id integer PRIMARY KEY,
+			"polygon" geometry(polygon,4326),
+			"parts" geometry(polygon,4326)[],
+			"place" geography(point)
+		);
+	`);
+	const row = {
+		id: 1,
+		polygon: square,
+		parts: [square, { type: 'Polygon', coordinates: [] } as Polygon],
+		place: { type: 'Point', coordinates: [19.0402, 47.4979] } as Point,
+	};
+	const inserted = await db.insert(shapes).values(row).returning();
+	expect(inserted).toStrictEqual([row]);
+	expect(await db.select().from(shapes)).toStrictEqual([row]);
+
+	const derived = await db.select({
+		centroid: sql`ST_Centroid(${shapes.polygon})`.mapWith(shapes.polygon),
+		srid: sql<number>`ST_SRID(${shapes.polygon})`,
+	}).from(shapes);
+	// `mapWith(shapes.polygon)` types the centroid as a Polygon; the value is the Point PostGIS returns.
+	expect(derived).toStrictEqual([{
+		centroid: { type: 'Point', coordinates: [0.5, 0.5] } as unknown as Polygon,
+		srid: 4326,
+	}]);
+
+	await db.execute(sql`drop table geo_shapes cascade`);
 });
