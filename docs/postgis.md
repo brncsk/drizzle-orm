@@ -136,8 +136,8 @@ needed and the value reads well in query logs.
   a mismatch (a Polygon into a `geometry(point)` column, or an SRID that
   differs from the typmod) with a message that names it.
 
-`geoJSONToEWKT` and `ewkbToGeoJSON` are exported from `drizzle-orm/pg-core`
-for code that needs the conversions outside a column.
+`geoJSONToEWKT`, `parseEWKT` and `ewkbToGeoJSON` are exported from
+`drizzle-orm/pg-core` for code that needs the conversions outside a column.
 
 ### Arrays
 

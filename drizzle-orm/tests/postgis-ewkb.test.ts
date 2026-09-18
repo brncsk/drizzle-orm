@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ewkbToGeoJSON, parseEWKB } from '~/pg-core/columns/postgis_extension/ewkb.ts';
-import { geoJSONToEWKT } from '~/pg-core/columns/postgis_extension/ewkt.ts';
+import { geoJSONToEWKT, parseEWKT } from '~/pg-core/columns/postgis_extension/ewkt.ts';
 import type { Geometry } from '~/pg-core/columns/postgis_extension/geojson.ts';
 
 /**
@@ -462,5 +462,58 @@ describe('geoJSONToEWKT', () => {
 		expect(() => geoJSONToEWKT({ type: 'Circle', coordinates: [1, 2] } as unknown as Geometry)).toThrow(
 			/type Circle/,
 		);
+	});
+});
+
+describe('parseEWKT', () => {
+	for (const vector of vectors) {
+		it(`reads ${vector.name}`, () => {
+			expect(parseEWKT(vector.ewkt)).toStrictEqual({
+				srid: vector.srid,
+				geometry: vector.geometry,
+				hasZ: vector.hasZ,
+				hasM: vector.hasM,
+			});
+		});
+	}
+
+	it('accepts PostGIS spacing, casing and bare multipoint positions', () => {
+		expect(parseEWKT('SRID=4326; point z ( 1 2 3 )')).toStrictEqual({
+			srid: 4326,
+			geometry: { type: 'Point', coordinates: [1, 2, 3] },
+			hasZ: true,
+			hasM: false,
+		});
+		expect(parseEWKT('POINT M (1 2 4)')).toStrictEqual({
+			srid: undefined,
+			geometry: { type: 'Point', coordinates: [1, 2, 4] },
+			hasZ: false,
+			hasM: true,
+		});
+		expect(parseEWKT('MULTIPOINT(1 2, 3 4, EMPTY)').geometry).toStrictEqual({
+			type: 'MultiPoint',
+			coordinates: [[1, 2], [3, 4], []],
+		});
+		expect(parseEWKT('GEOMETRYCOLLECTIONM(POINTM(1 2 3),LINESTRINGM(0 0 0,1 1 1))')).toStrictEqual({
+			srid: undefined,
+			hasZ: false,
+			hasM: true,
+			geometry: {
+				type: 'GeometryCollection',
+				geometries: [
+					{ type: 'Point', coordinates: [1, 2, 3] },
+					{ type: 'LineString', coordinates: [[0, 0, 0], [1, 1, 1]] },
+				],
+			},
+		});
+		expect(parseEWKT('POINT(1e+21 -1e-7)').geometry).toStrictEqual({ type: 'Point', coordinates: [1e21, -1e-7] });
+	});
+
+	it('rejects malformed text', () => {
+		expect(() => parseEWKT('CIRCULARSTRING(0 0,1 1,2 0)')).toThrow(/expected a geometry type keyword/);
+		expect(() => parseEWKT('POINT(1)')).toThrow(/expected a number/);
+		expect(() => parseEWKT('POINT(1 2')).toThrow(/expected '\)'/);
+		expect(() => parseEWKT('POINT(1 2) trailing')).toThrow(/unexpected trailing text/);
+		expect(() => parseEWKT('POINT(1 2 3 4 5)')).toThrow(/too many ordinates/);
 	});
 });

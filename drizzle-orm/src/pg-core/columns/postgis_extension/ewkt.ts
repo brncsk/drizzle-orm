@@ -122,3 +122,151 @@ export function geoJSONToEWKT(geometry: Geometry, options: GeoJSONToEWKTOptions 
 	const body = formatGeometry(geometry, options.mOnly === true);
 	return options.srid === undefined ? body : `SRID=${options.srid};${body}`;
 }
+
+/**
+ * Result of {@link parseEWKT}.
+ */
+export interface ParsedEWKT {
+	/** SRID from the `SRID=n;` prefix, or `undefined` when there is none. */
+	srid: number | undefined;
+	/** The geometry as GeoJSON. */
+	geometry: Geometry;
+	/** `true` when the positions carry a Z ordinate. */
+	hasZ: boolean;
+	/** `true` when the positions carry an M ordinate. */
+	hasM: boolean;
+}
+
+const EWKT_KEYWORD =
+	/^(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION)\s*(ZM|Z|M)?\b/i;
+const EWKT_NUMBER = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
+
+/**
+ * Parses PostGIS EWKT (or WKT) into GeoJSON: the inverse of
+ * {@link geoJSONToEWKT}.
+ *
+ * It reads the seven GeoJSON-representable types, an optional `SRID=n;`
+ * prefix, the `Z`, `M` and `ZM` keyword suffixes (attached or separated by
+ * a space), `EMPTY` at any level and both point forms inside a MultiPoint
+ * (`MULTIPOINT((1 2),(3 4))` and `MULTIPOINT(1 2,3 4)`). Without a suffix,
+ * three numbers per position are X, Y and Z, and four are X, Y, Z and M,
+ * as in PostGIS. Curve types throw.
+ */
+export function parseEWKT(text: string): ParsedEWKT {
+	let pos = 0;
+	const skipSpace = () => {
+		while (pos < text.length && /\s/.test(text[pos]!)) pos++;
+	};
+	const fail = (what: string): never => {
+		throw new Error(`Invalid EWKT: ${what} at position ${pos} in ${JSON.stringify(text)}`);
+	};
+	const expect = (char: string) => {
+		skipSpace();
+		if (text[pos] !== char) fail(`expected '${char}'`);
+		pos++;
+	};
+	const peek = (char: string): boolean => {
+		skipSpace();
+		return text[pos] === char;
+	};
+	const isEmpty = (): boolean => {
+		skipSpace();
+		if (text.slice(pos, pos + 5).toUpperCase() === 'EMPTY') {
+			pos += 5;
+			return true;
+		}
+		return false;
+	};
+
+	let hasZ = false;
+	let hasM = false;
+	/** Dimension mode of the geometry being read: set by a keyword suffix, else by the first position. */
+	let mode: 'z' | 'm' | 'zm' | undefined;
+
+	const readNumber = (): number => {
+		skipSpace();
+		const match = EWKT_NUMBER.exec(text.slice(pos));
+		if (!match) fail('expected a number');
+		pos += match![0].length;
+		return Number(match![0]);
+	};
+	const readPosition = (): Position => {
+		const position: Position = [readNumber(), readNumber()];
+		while (!peek(',') && !peek(')') && pos < text.length) position.push(readNumber());
+		if (position.length > 4) fail('too many ordinates in a position');
+		if (mode === undefined && position.length === 3) mode = 'z';
+		if (mode === undefined && position.length === 4) mode = 'zm';
+		if (position.length === 3) {
+			if (mode === 'm') hasM = true;
+			else hasZ = true;
+		} else if (position.length === 4) {
+			hasZ = true;
+			hasM = true;
+		}
+		return position;
+	};
+	const readList = <T>(item: () => T): T[] => {
+		const items: T[] = [];
+		expect('(');
+		items.push(item());
+		while (peek(',')) {
+			pos++;
+			items.push(item());
+		}
+		expect(')');
+		return items;
+	};
+	const readPositions = (): Position[] => isEmpty() ? [] : readList(readPosition);
+	const readRings = (): Position[][] => isEmpty() ? [] : readList(readPositions);
+	const readPointPart = (): Position => {
+		if (isEmpty()) return [];
+		if (peek('(')) {
+			pos++;
+			const position = readPosition();
+			expect(')');
+			return position;
+		}
+		return readPosition();
+	};
+
+	const readGeometry = (): Geometry => {
+		skipSpace();
+		const match = EWKT_KEYWORD.exec(text.slice(pos));
+		if (!match) fail('expected a geometry type keyword');
+		pos += match![0].length;
+		const keyword = match![1]!.toUpperCase();
+		const suffix = match![2]?.toUpperCase();
+		if (suffix === 'M') mode = 'm';
+		else if (suffix === 'Z') mode = 'z';
+		else if (suffix === 'ZM') mode = 'zm';
+
+		switch (keyword) {
+			case 'POINT':
+				return { type: 'Point', coordinates: isEmpty() ? [] : readList(readPosition)[0]! };
+			case 'LINESTRING':
+				return { type: 'LineString', coordinates: readPositions() };
+			case 'POLYGON':
+				return { type: 'Polygon', coordinates: readRings() };
+			case 'MULTIPOINT':
+				return { type: 'MultiPoint', coordinates: isEmpty() ? [] : readList(readPointPart) };
+			case 'MULTILINESTRING':
+				return { type: 'MultiLineString', coordinates: isEmpty() ? [] : readList(readPositions) };
+			case 'MULTIPOLYGON':
+				return { type: 'MultiPolygon', coordinates: isEmpty() ? [] : readList(readRings) };
+			default:
+				return { type: 'GeometryCollection', geometries: isEmpty() ? [] : readList(readGeometry) };
+		}
+	};
+
+	let srid: number | undefined;
+	skipSpace();
+	const sridMatch = /^SRID\s*=\s*(\d+)\s*;/i.exec(text.slice(pos));
+	if (sridMatch) {
+		srid = Number(sridMatch[1]);
+		pos += sridMatch[0].length;
+	}
+	const geometry = readGeometry();
+	skipSpace();
+	if (pos !== text.length) fail('unexpected trailing text');
+	return { srid, geometry, hasZ, hasM };
+}
