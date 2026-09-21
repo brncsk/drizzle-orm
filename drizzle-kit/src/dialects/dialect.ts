@@ -15,15 +15,25 @@ type Simplify<T> =
 
 type Assume<T, U> = T extends U ? T : U;
 
+/*
+	`required` and `optional` apply to the common keys (`schema`, `table`)
+	only: `required` makes the key non-null for this entity, `optional`
+	keeps it nullable. A key that is left out is not part of the entity at
+	all, so an entity that sometimes has a table and sometimes does not
+	(a privilege, which is held on a table or on a schema) declares it
+	`optional`.
+*/
+type CommonMarker = 'required' | 'optional';
+
 type ExtendedType =
 	| (`${Exclude<DataType, 'string[]'>}?` | DataType)
-	| 'required'
+	| CommonMarker
 	| [string, ...(string | null)[]]
 	| {
-		[K: string]: Exclude<ExtendedType, 'required'>;
+		[K: string]: Exclude<ExtendedType, CommonMarker>;
 	}
 	| ([{
-		[K: string]: Exclude<ExtendedType, 'required'>;
+		[K: string]: Exclude<ExtendedType, CommonMarker>;
 	}]);
 
 type InferField<T extends ExtendedType> = T extends (string | null)[] ? T[number]
@@ -43,7 +53,8 @@ type Definition = Record<string, Schema>;
 
 type InferSchema<TSchema extends Schema> = Simplify<
 	{
-		-readonly [K in keyof TSchema]: K extends keyof Common ? Exclude<Common[K], null>
+		-readonly [K in keyof TSchema]: K extends keyof Common
+			? TSchema[K] extends 'optional' ? Common[K] : Exclude<Common[K], null>
 			: InferField<Assume<TSchema[K], ExtendedType>>;
 	}
 >;
@@ -59,7 +70,7 @@ type NullAsUndefined<TData extends Record<string, any>> =
 type Schema =
 	& Record<string, ExtendedType>
 	& {
-		[K in keyof Common as null extends Common[K] ? K : never]?: 'required';
+		[K in keyof Common as null extends Common[K] ? K : never]?: CommonMarker;
 	}
 	& {
 		[K in keyof Common as null extends Common[K] ? never : K]?: never;
@@ -635,10 +646,9 @@ export type DiffCreate<
 			$diffType: 'create';
 			entityType: TType;
 		}
+		// the name and the common keys the entity declares, nullable when declared `optional`
 		& {
-			[
-				K in keyof Common as K extends keyof TShape ? null extends TShape[K] ? never : K : K
-			]: Exclude<Common[K], null>;
+			[K in keyof Common as K extends 'name' | keyof TSchema[TType] ? K : never]: TShape[K];
 		}
 		& Omit<TShape, keyof CommonEntity>
 	>;
@@ -662,9 +672,7 @@ export type DiffDrop<
 			entityType: TType;
 		}
 		& {
-			[
-				K in keyof Common as K extends keyof TShape ? null extends TShape[K] ? never : K : K
-			]: Exclude<Common[K], null>;
+			[K in keyof Common as K extends 'name' | keyof TSchema[TType] ? K : never]: TShape[K];
 		}
 		& Omit<TShape, keyof CommonEntity>
 	>;
@@ -764,7 +772,8 @@ function getRowCommons(row: Record<string, any>): {
 } {
 	const res: Record<string, any> = {};
 	for (const k of Object.keys(commonConfig)) {
-		if (row[k] === undefined || row[k] === null) continue;
+		// a common key the entity declares `optional` is null when absent, and stays so
+		if (row[k] === undefined) continue;
 
 		res[k] = row[k];
 	}
@@ -939,18 +948,19 @@ class SimpleDb<TDefinition extends Definition = Record<string, any>> {
 			Object.entries(def).forEach(([fieldName, fieldValue]) => {
 				cloneDef[fieldName] = fieldValue;
 
-				if (fieldValue === 'required') {
+				if (fieldValue === 'required' || fieldValue === 'optional') {
 					if (!(fieldName in commonConfig)) {
 						throw new Error(
-							`Type value "required" is only applicable to common keys [ ${
+							`Type values "required" and "optional" are only applicable to common keys [ ${
 								Object.keys(commonConfig).map((e) => `"${e}"`).join(', ')
 							} ], used on: "${fieldName}"`,
 						);
 					}
 
-					cloneDef[fieldName] = (removeQuestionMark(commonConfig[fieldName] as string)) as Exclude<
+					const common = commonConfig[fieldName] as string;
+					cloneDef[fieldName] = (fieldValue === 'required' ? removeQuestionMark(common) : common) as Exclude<
 						ExtendedType,
-						'required'
+						CommonMarker
 					>;
 				} else {
 					if (fieldName in commonConfig) {
