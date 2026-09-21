@@ -3,6 +3,7 @@ import { entityKind, is } from '~/entity.ts';
 import { SQL, sql, type SQLWrapper } from '~/sql/sql.ts';
 import type { NonArray, Writable } from '~/utils.ts';
 import { type PgEnum, type PgEnumObject, pgEnumObjectWithSchema, pgEnumWithSchema } from './columns/enum.ts';
+import { type PgFunctionFn, pgFunctionWithSchema } from './functions.ts';
 import { type pgSequence, pgSequenceWithSchema } from './sequence.ts';
 import { EnableRLS, type PgTableFn, type PgTableFnInternal, pgTableWithSchema } from './table.ts';
 import { type PgMaterializedViewFn, pgMaterializedViewWithSchema, type PgViewFn, pgViewWithSchema } from './view.ts';
@@ -60,6 +61,11 @@ export class PgSchema<TName extends string = string> implements SQLWrapper {
 	sequence: typeof pgSequence = ((name, options) => {
 		return pgSequenceWithSchema(name, options, this.schemaName);
 	});
+
+	/** A function of this schema: `pgFunction`, qualified. */
+	function: PgFunctionFn = (name, config) => {
+		return pgFunctionWithSchema(name, config, this.schemaName);
+	};
 
 	getSQL(): SQL {
 		return new SQL([sql.identifier(this.schemaName)]);
