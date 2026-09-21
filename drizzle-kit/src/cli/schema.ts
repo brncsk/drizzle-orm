@@ -192,6 +192,7 @@ export const runPush = async (
 		explain,
 		migrations,
 		filenames,
+		transforms,
 		hints,
 	} = config;
 
@@ -229,7 +230,7 @@ export const runPush = async (
 		const { SchemaSource } = await import('../dialects/postgres/drizzle');
 		const { handle } = await import('./commands/push-postgres');
 		return await handle(
-			SchemaSource.fromFilenames(filenames),
+			SchemaSource.fromFilenames(filenames, transforms),
 			verbose,
 			credentials,
 			filters,

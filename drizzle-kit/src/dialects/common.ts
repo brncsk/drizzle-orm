@@ -1,3 +1,22 @@
+/**
+ * A transform of a loaded schema file: it sees the module's exports and
+ * the file's path, and returns what to add to the exports before the
+ * schema objects are collected from them; a returned key replaces an
+ * export of the same name. What it returns follows the file's own
+ * exports, in the order returned, a replaced export among them, so the
+ * transform decides the order its objects are created in where that
+ * matters (a function after the ones its body calls). The config names
+ * them (`transform: [...]`), and each schema file passes through every
+ * transform in order. What a
+ * transform returns is ordinary schema objects (a table, a function, ...),
+ * so a schema may be derived from a file at load time: built, generated,
+ * or read off objects drizzle-kit does not know.
+ */
+export type SchemaTransform = (
+	exports: Record<string, unknown>,
+	path: string,
+) => Promise<Record<string, unknown>> | Record<string, unknown>;
+
 export type ResolverOutput<T> = {
 	created: T[];
 	deleted: T[];

@@ -3,6 +3,7 @@ import type { AnyPgTable } from 'drizzle-orm/pg-core';
 import type { PgAsyncDatabase } from 'drizzle-orm/pg-core/async';
 import type { EntitiesFilterConfig } from '../cli/validations/common';
 import type { PostgresCredentials } from '../cli/validations/postgres';
+import type { SchemaTransform } from '../dialects/common';
 import type {
 	CheckConstraint,
 	Column,
@@ -20,6 +21,7 @@ import type {
 	View,
 } from '../dialects/postgres/ddl';
 import { createDDL, interimToDDL } from '../dialects/postgres/ddl';
+import type { PreparedPostgresSchema } from '../dialects/postgres/drizzle';
 import type { PostgresSnapshot } from '../dialects/postgres/snapshot';
 import { upToV9 } from '../dialects/postgres/versions';
 import { originUUID } from '../utils';
@@ -30,21 +32,59 @@ export const generateDrizzleJson = async (
 	prevId?: string,
 	schemaFilters?: string[],
 ): Promise<PostgresSnapshot> => {
-	const { prepareEntityFilter } = await import('src/dialects/pull-utils');
-	const { humanLog, postgresSchemaError, postgresSchemaWarning } = await import('../cli/views');
-	const { toJsonSnapshot } = await import('../dialects/postgres/snapshot');
-	const { fromDrizzleSchema, fromExports } = await import('../dialects/postgres/drizzle');
-	const { extractPostgresExisting } = await import('../dialects/drizzle');
-	const prepared = fromExports(imports);
-
-	const existing = extractPostgresExisting(prepared.schemas, prepared.views, prepared.matViews);
-
-	const filter = prepareEntityFilter('postgresql', {
+	const { fromExports } = await import('../dialects/postgres/drizzle');
+	return snapshotOf(fromExports(imports), {
 		schemas: schemaFilters ?? [],
 		tables: [],
 		entities: undefined,
 		extensions: [],
-	}, existing);
+	}, prevId);
+};
+
+/**
+ * The snapshot of the schema files given, loaded as the CLI loads them:
+ * each file's exports pass through the transforms, in order, before the
+ * schema objects are collected. `filters` is what the config would
+ * carry (`schemaFilter`, `tablesFilter`, `entities`, `extensionsFilters`).
+ * What a project compares its newest snapshot against to know whether a
+ * migration is due.
+ */
+export const generateDrizzleJsonFromFiles = async (
+	paths: string[],
+	options: {
+		transforms?: SchemaTransform[];
+		prevId?: string;
+		filters?: EntitiesFilterConfig;
+	} = {},
+): Promise<PostgresSnapshot> => {
+	const { prepareFromSchemaFiles } = await import('../dialects/postgres/drizzle');
+	const prepared = await prepareFromSchemaFiles(paths, options.transforms ?? []);
+	return snapshotOf(
+		prepared,
+		options.filters ?? {
+			schemas: [],
+			tables: [],
+			entities: undefined,
+			extensions: [],
+		},
+		options.prevId,
+	);
+};
+
+const snapshotOf = async (
+	prepared: PreparedPostgresSchema,
+	filters: EntitiesFilterConfig,
+	prevId?: string,
+): Promise<PostgresSnapshot> => {
+	const { prepareEntityFilter } = await import('src/dialects/pull-utils');
+	const { humanLog, postgresSchemaError, postgresSchemaWarning } = await import('../cli/views');
+	const { toJsonSnapshot } = await import('../dialects/postgres/snapshot');
+	const { fromDrizzleSchema } = await import('../dialects/postgres/drizzle');
+	const { declaredRoles, extractPostgresExisting } = await import('../dialects/drizzle');
+
+	const existing = extractPostgresExisting(prepared.schemas, prepared.views, prepared.matViews);
+
+	const filter = prepareEntityFilter('postgresql', filters, existing, declaredRoles(prepared));
 
 	// TODO: do we wan't to export everything or ignore .existing and respect entity filters in config
 	const { schema: interim, errors, warnings } = fromDrizzleSchema(prepared, filter);

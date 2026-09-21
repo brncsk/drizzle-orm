@@ -1,7 +1,10 @@
 import type { PGlite } from '@electric-sql/pglite';
 import type { ConnectionOptions } from 'tls';
 import type { Driver } from './cli/validations/common';
+import type { SchemaTransform } from './dialects/common';
 import type { Dialect } from './utils/schemaValidator';
+
+export type { SchemaTransform } from './dialects/common';
 
 // import {SslOptions} from 'mysql2'
 type SslOptions = {
@@ -116,6 +119,16 @@ export type Config =
 		extensionsFilters?: 'postgis'[];
 		schemaFilter?: string | string[];
 		schema?: string | string[];
+		/**
+		 * Transforms of the loaded schema files, applied in order to each file's
+		 * exports before the schema objects are collected: `(exports, path) =>
+		 * more exports`. What a transform returns is added to the file's exports
+		 * after them, in the order returned (a returned key replaces an export of
+		 * the same name and takes the transform's place), so a schema can be
+		 * derived at load time from what a file holds, and created in the order
+		 * the transform gives. PostgreSQL only.
+		 */
+		transform?: SchemaTransform[];
 		verbose?: boolean;
 		migrations?: {
 			table?: string;
