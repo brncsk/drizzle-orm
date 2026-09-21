@@ -41,6 +41,7 @@ test('push #1', async (t) => {
 		},
 		force: false,
 		filenames: [filename],
+		transforms: [],
 		explain: false,
 		filters: {
 			schemas: undefined,
@@ -69,6 +70,7 @@ test('push #2', async (t) => {
 		},
 		force: false,
 		filenames: [filename],
+		transforms: [],
 		explain: false,
 		filters: {
 			schemas: undefined,
@@ -99,6 +101,7 @@ test('push #3', async (t) => {
 		},
 		force: false,
 		filenames: [filename],
+		transforms: [],
 		explain: false,
 		filters: {
 			schemas: undefined,
@@ -137,6 +140,7 @@ test('push #4', async (t) => {
 			extensions: undefined,
 		},
 		filenames: [filename],
+		transforms: [],
 		verbose: false,
 
 		migrations: {
@@ -164,6 +168,7 @@ test('push #5', async (t) => {
 			user: 'postgresql',
 		},
 		filenames: [filename],
+		transforms: [],
 		explain: false,
 		filters: {
 			schemas: undefined,
@@ -246,6 +251,7 @@ test('validate config #1', async (t) => {
 			table: '__drizzle_migrations',
 		},
 		filenames: [filename],
+		transforms: [],
 		hints: expect.any(HintsHandler) as any,
 	};
 	expect(res.options).toStrictEqual(expected);
@@ -307,6 +313,7 @@ test('validate config #2', async (t) => {
 			table: '__drizzle_migrations',
 		},
 		filenames: [filename],
+		transforms: [],
 		hints: expect.any(HintsHandler) as any,
 	};
 	expect(res.options).toStrictEqual(expected);
@@ -363,6 +370,7 @@ test('validate config #3', async (t) => {
 			table: 'test_table',
 		},
 		filenames: [filename],
+		transforms: [],
 		hints: expect.any(HintsHandler) as any,
 	};
 	expect(res.options).toStrictEqual(expected);
@@ -402,6 +410,7 @@ test('validate config #4', async (t) => {
 			table: '__drizzle_migrations',
 		},
 		filenames: [filename],
+		transforms: [],
 		hints: expect.any(HintsHandler) as any,
 	};
 	expect(res.options).toStrictEqual(expected);
@@ -465,6 +474,7 @@ test('Issue No3626. Validate schemaFilter option', async () => {
 		dialect: 'postgresql',
 		explain: false,
 		filenames: [filename],
+		transforms: [],
 		filters: {
 			entities: undefined,
 			extensions: undefined,

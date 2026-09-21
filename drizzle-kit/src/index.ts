@@ -14,7 +14,10 @@ import type {
 } from './cli/validations/postgres';
 import type { singlestoreCredentials } from './cli/validations/singlestore';
 import type { d1HttpCredentials, sqliteCloudCredentials, sqliteDefaultCredentials } from './cli/validations/sqlite';
+import type { SchemaTransform } from './dialects/common';
 import type { Dialect } from './utils/schemaValidator';
+
+export type { SchemaTransform } from './dialects/common';
 
 /**
  * **You are currently using version 0.21.0+ of drizzle-kit. If you have just upgraded to this version, please make sure to read the changelog to understand what changes have been made and what
@@ -121,6 +124,16 @@ export type ConfigVariant<TDialect extends Dialect, TDriver extends DialectDrive
 		extensionsFilters?: 'postgis'[];
 		schemaFilter?: string | string[];
 		schema?: string | string[];
+		/**
+		 * Transforms of the loaded schema files, applied in order to each file's
+		 * exports before the schema objects are collected: `(exports, path) =>
+		 * more exports`. What a transform returns is added to the file's exports
+		 * after them, in the order returned (a returned key replaces an export of
+		 * the same name and takes the transform's place), so a schema can be
+		 * derived at load time from what a file holds, and created in the order
+		 * the transform gives. PostgreSQL only.
+		 */
+		transform?: SchemaTransform[];
 		verbose?: boolean;
 		migrations?: {
 			table?: string;
