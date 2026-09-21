@@ -4,7 +4,7 @@ export type ResolverOutput<T> = {
 	renamedOrMoved: { from: T; to: T }[];
 };
 
-export type Resolver<T extends { name: string; schema?: string; table?: string }> = (it: {
+export type Resolver<T extends { name: string; schema?: string; table?: string | null }> = (it: {
 	created: T[];
 	deleted: T[];
 }) => Promise<ResolverOutput<T>>;

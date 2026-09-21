@@ -28,6 +28,7 @@ import {
 	isSystemNamespace,
 	parseOnType,
 	parseViewDefinition,
+	privilegeName,
 	stringFromDatabaseIdentityProperty as parseIdentityProperty,
 	wrapRecord,
 } from './grammar';
@@ -83,6 +84,7 @@ export const fromDatabase = async (
 	type Namespace = {
 		oid: number | string;
 		name: string;
+		owner: string;
 	};
 
 	// ! Use `pg_catalog` for system tables, functions and operators (Prevent security vulnerabilities - overwriting system tables, functions and operators)
@@ -118,7 +120,7 @@ export const fromDatabase = async (
 	});
 
 	const namespacesQuery = db.query<Namespace>(
-		`SELECT oid, nspname as name FROM pg_catalog.pg_namespace WHERE pg_catalog.has_schema_privilege(oid, 'USAGE') ORDER BY pg_catalog.lower(nspname)`,
+		`SELECT oid, nspname as name, pg_catalog.pg_get_userbyid(nspowner) AS owner FROM pg_catalog.pg_namespace WHERE pg_catalog.has_schema_privilege(oid, 'USAGE') ORDER BY pg_catalog.lower(nspname)`,
 	)
 		.then((rows) => {
 			queryCallback('namespaces', rows, null);
@@ -183,6 +185,7 @@ export const fromDatabase = async (
 		rlsEnabled: boolean;
 		tablespaceid: number | string;
 		definition: string | null;
+		owner: string;
 		comment: string | null;
 	};
 	progressCallback('tables', 0, 'fetching');
@@ -203,6 +206,7 @@ export const fromDatabase = async (
 						THEN pg_catalog.pg_get_viewdef(pg_class.oid, true)
 					ELSE null
 				END as "definition",
+				pg_catalog.pg_get_userbyid(relowner) AS "owner",
 				pg_catalog.obj_description(pg_class.oid, 'pg_class') AS "comment"
 			FROM
 				pg_catalog.pg_class
@@ -450,24 +454,45 @@ export const fromDatabase = async (
 		grantor: string;
 		grantee: string;
 		schema: string;
-		table: string;
-		type: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'TRUNCATE' | 'REFERENCES' | 'TRIGGER';
+		/* null for a privilege on the schema itself */
+		table: string | null;
+		type: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'TRUNCATE' | 'REFERENCES' | 'TRIGGER' | 'USAGE' | 'CREATE';
 		isGrantable: boolean;
 	};
+	// the privileges are read off the ACLs of the relations (tables, views,
+	// materialized views, which information_schema leaves out) and of the
+	// schemas; an object with no ACL of its own reports nothing, which is
+	// right, since only its owner reaches it then
 	const privilegesQuery = filteredNamespacesStringForSQL
 		? db.query<PrivilegeListItem>(`
-		SELECT
-			grantor,
-			grantee,
-			table_schema AS "schema",
-			table_name AS "table",
-			privilege_type AS "type",
-			CASE is_grantable WHEN 'YES' THEN true ELSE false END AS "isGrantable"
-		FROM information_schema.role_table_grants
-		WHERE table_schema IN (${filteredNamespacesStringForSQL})
+		SELECT * FROM (
+			SELECT
+				pg_catalog.pg_get_userbyid(acl.grantor)::text AS grantor,
+				CASE WHEN acl.grantee OPERATOR(pg_catalog.=) 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee)::text END AS grantee,
+				nspname::text AS "schema",
+				relname::text AS "table",
+				acl.privilege_type::text AS "type",
+				acl.is_grantable AS "isGrantable"
+			FROM pg_catalog.pg_class
+			JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) relnamespace
+			CROSS JOIN LATERAL pg_catalog.aclexplode(relacl) AS acl
+			WHERE relkind IN ('r', 'p', 'v', 'm')
+				AND nspname IN (${filteredNamespacesStringForSQL})
+			UNION ALL
+			SELECT
+				pg_catalog.pg_get_userbyid(acl.grantor)::text AS grantor,
+				CASE WHEN acl.grantee OPERATOR(pg_catalog.=) 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee)::text END AS grantee,
+				nspname::text AS "schema",
+				NULL::text AS "table",
+				acl.privilege_type::text AS "type",
+				acl.is_grantable AS "isGrantable"
+			FROM pg_catalog.pg_namespace
+			CROSS JOIN LATERAL pg_catalog.aclexplode(nspacl) AS acl
+			WHERE nspname IN (${filteredNamespacesStringForSQL})
+		) AS privileges
 		ORDER BY
-			pg_catalog.lower(table_schema),
-			pg_catalog.lower(table_name),
+			pg_catalog.lower("schema"),
+			pg_catalog.lower("table"),
 			pg_catalog.lower(grantee);
 	`).then((rows) => {
 				queryCallback('privileges', rows, null);
@@ -675,11 +700,19 @@ export const fromDatabase = async (
 	}
 
 	for (const privilege of privilegesList) {
+		const owner = privilege.table === null
+			? namespaces.find((it) => it.name === privilege.schema)?.owner
+			: tablesList.find((it) => it.schema === privilege.schema && it.name === privilege.table)?.owner;
+
+		// the owner holds every privilege on its object without a grant
+		if (privilege.grantee === owner) continue;
+
+		// a privilege the owner granted is what a declared one becomes, so it has no grantor of its own
+		const grantor = privilege.grantor === owner ? null : privilege.grantor;
 		privileges.push({
 			entityType: 'privileges',
-			// TODO: remove name and implement custom pk
-			name: `${privilege.grantor}_${privilege.grantee}_${privilege.schema}_${privilege.table}_${privilege.type}`,
-			grantor: privilege.grantor,
+			name: privilegeName({ ...privilege, grantor }),
+			grantor,
 			grantee: privilege.grantee,
 			schema: privilege.schema,
 			table: privilege.table,
@@ -1200,6 +1233,12 @@ export const fromDatabase = async (
 	const resultViewColumns = viewColumns.filter((x) =>
 		resultViews.some((v) => v.schema === x.schema && v.name === x.view)
 	);
+	const resultPrivileges = privileges.filter((x) => {
+		if (!filter({ type: 'privilege', grantee: x.grantee })) return false;
+		if (x.table === null) return resultSchemas.some((s) => s.name === x.schema);
+		return resultTables.some((t) => t.schema === x.schema && t.name === x.table)
+			|| resultViews.some((v) => v.schema === x.schema && v.name === x.table);
+	});
 
 	return {
 		schemas: resultSchemas,
@@ -1213,7 +1252,7 @@ export const fromDatabase = async (
 		checks: resultChecks,
 		sequences: resultSequences,
 		roles: resultRoles,
-		privileges,
+		privileges: resultPrivileges,
 		policies: resultPolicies,
 		views: resultViews,
 		viewColumns: resultViewColumns,
@@ -1236,7 +1275,10 @@ export const fromDatabaseForDrizzle = async (
 	const res = await fromDatabase(db, filter, progressCallback);
 	res.schemas = res.schemas.filter((it) => it.name !== 'public');
 	res.indexes = res.indexes.filter((it) => !it.forPK && !it.forUnique);
-	res.privileges = [];
+	// the migrations table and its schema are not the drizzle schema's, so neither are the privileges on them
+	res.privileges = res.privileges.filter((it) =>
+		it.schema !== migrations.schema || (it.table !== null && it.table !== migrations.table)
+	);
 
 	filterMigrationsSchema(res, migrations);
 

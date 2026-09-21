@@ -1445,7 +1445,7 @@ export class ResolveSelectNamed<T extends Named> extends Prompt<
 	}
 }
 
-type EntityBase = { schema?: string; table?: string; name: string };
+type EntityBase = { schema?: string; table?: string | null; name: string };
 
 const keyFor = (it: EntityBase, defaultSchema: 'dbo' | 'public' = 'public') => {
 	const schemaPrefix = it.schema && it.schema !== defaultSchema ? `${it.schema}.` : '';
