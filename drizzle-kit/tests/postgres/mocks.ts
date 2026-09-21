@@ -8,6 +8,8 @@ import {
 	PgDialect,
 	PgEnum,
 	PgEnumObject,
+	PgExtension,
+	PgFunction,
 	PgGrant,
 	PgMaterializedView,
 	PgPolicy,
@@ -16,6 +18,7 @@ import {
 	PgSequence,
 	PgTable,
 	pgTable,
+	PgTrigger,
 	PgView,
 	serial,
 } from 'drizzle-orm/pg-core';
@@ -98,6 +101,9 @@ export type PostgresSchema = Record<
 	| PgRole
 	| PgPolicy
 	| PgGrant
+	| PgFunction
+	| PgTrigger
+	| PgExtension
 	| unknown
 >;
 
@@ -139,8 +145,24 @@ export const drizzleToDDL = (
 	const views = Object.values(schema).filter((it) => isPgView(it)) as PgView[];
 	const materializedViews = Object.values(schema).filter((it) => isPgMaterializedView(it)) as PgMaterializedView[];
 	const grants = Object.values(schema).filter((it) => is(it, PgGrant)) as PgGrant[];
+	const functions = Object.values(schema).filter((it) => is(it, PgFunction)) as PgFunction[];
+	const triggers = Object.values(schema).filter((it) => is(it, PgTrigger)) as PgTrigger[];
+	const extensions = Object.values(schema).filter((it) => is(it, PgExtension)) as PgExtension[];
 
-	const grouped = { schemas, tables, enums, sequences, roles, policies, views, matViews: materializedViews, grants };
+	const grouped = {
+		schemas,
+		tables,
+		enums,
+		sequences,
+		roles,
+		policies,
+		views,
+		matViews: materializedViews,
+		grants,
+		functions,
+		triggers,
+		extensions,
+	};
 
 	const existing = extractPostgresExisting(schemas, views, materializedViews);
 	const filter = prepareEntityFilter('postgresql', filtersConfig, existing, declaredRoles(grouped));

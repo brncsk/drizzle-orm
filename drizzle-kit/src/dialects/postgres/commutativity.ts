@@ -76,6 +76,36 @@ function makeSchemaTarget(schemaName: string): FootprintTarget {
  * - If the problem is "this statement is matched at the wrong scope",
  *   edit `primary`, `ancestors`, or `getImplicitAncestors()`.
  */
+/** What a function's create, replace or drop keeps its order against: other function statements, and the views, the triggers and the indexes that may call it. */
+const functionConflicts: JsonStatement['type'][] = [
+	'create_function',
+	'replace_function',
+	'drop_function',
+	'comment_function',
+	'create_view',
+	'drop_view',
+	'replace_view',
+	'alter_view',
+	'create_trigger',
+	'drop_trigger',
+	'create_index',
+	'drop_index',
+	'recreate_index',
+];
+
+/** What a trigger's create or drop keeps its order against: its table, its function, and the other triggers of the table. */
+const triggerConflicts: JsonStatement['type'][] = [
+	'create_trigger',
+	'drop_trigger',
+	'create_function',
+	'replace_function',
+	'drop_function',
+	'create_table',
+	'drop_table',
+	'rename_table',
+	'move_table',
+];
+
 class PostgresCommutativity extends AbstractCommutativity<
 	JsonStatement,
 	PostgresSnapshot,
@@ -113,6 +143,12 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'drop_role',
 		'alter_role',
 		'rename_role',
+		'create_function',
+		'replace_function',
+		'drop_function',
+		'comment_function',
+		'create_extension',
+		'drop_extension',
 	]);
 	private schemaConflictTypes: JsonStatement['type'][] = [
 		'create_schema',
@@ -171,6 +207,12 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'grant_privilege',
 		'revoke_privilege',
 		'regrant_privilege',
+		'create_function',
+		'replace_function',
+		'drop_function',
+		'comment_function',
+		'create_extension',
+		'drop_extension',
 	];
 
 	protected override getStatementDefinitions(): StatementDefinitions {
@@ -674,6 +716,68 @@ class PostgresCommutativity extends AbstractCommutativity<
 				conflicts: ['grant_privilege', 'revoke_privilege', 'regrant_privilege'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.privilege.schema || '', statement.privilege.table || ''),
+					ancestors: [],
+				}),
+			},
+
+			// Function operations: a function conflicts with the views, the triggers and the indexes that may call it, so those keep their order too
+			create_function: {
+				conflicts: functionConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.function.schema, statement.function.name),
+					ancestors: [],
+				}),
+			},
+			replace_function: {
+				conflicts: functionConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.function.schema, statement.function.name),
+					ancestors: [],
+				}),
+			},
+			drop_function: {
+				conflicts: functionConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.function.schema, statement.function.name),
+					ancestors: [],
+				}),
+			},
+			comment_function: {
+				conflicts: ['create_function', 'replace_function', 'drop_function', 'comment_function'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.function.schema, statement.function.name),
+					ancestors: [],
+				}),
+			},
+
+			// Trigger operations: on the table, after its function
+			create_trigger: {
+				conflicts: triggerConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.trigger.schema, statement.trigger.table),
+					ancestors: [],
+				}),
+			},
+			drop_trigger: {
+				conflicts: triggerConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.trigger.schema, statement.trigger.table),
+					ancestors: [],
+				}),
+			},
+
+			// Extension operations: before and after everything in the schema they are installed in
+			create_extension: {
+				conflicts: ['create_extension', 'drop_extension', 'create_schema', 'drop_schema', 'rename_schema'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.extension.schema ?? '', statement.extension.name),
+					ancestors: [],
+				}),
+			},
+			drop_extension: {
+				conflicts: ['create_extension', 'drop_extension', 'create_schema', 'drop_schema', 'rename_schema'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.extension.schema ?? '', statement.extension.name),
 					ancestors: [],
 				}),
 			},

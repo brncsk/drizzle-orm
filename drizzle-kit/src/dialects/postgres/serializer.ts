@@ -716,6 +716,37 @@ export function generateLatestSnapshot(
 				replace(ddl.views, statement.diff.$left, statement.view);
 				break;
 
+			case 'create_function':
+				push(ddl.functions, statement.function);
+				break;
+			case 'replace_function':
+				replace(ddl.functions, statement.from, statement.function);
+				break;
+			case 'drop_function':
+				del(ddl.functions, statement.function);
+				break;
+			case 'comment_function':
+				ddl.functions.update({
+					where: { schema: statement.function.schema, name: statement.function.name },
+					set: { comment: statement.function.comment },
+				});
+				break;
+
+			case 'create_trigger':
+				if (statement.from) replace(ddl.triggers, statement.from, statement.trigger);
+				else push(ddl.triggers, statement.trigger);
+				break;
+			case 'drop_trigger':
+				del(ddl.triggers, statement.trigger);
+				break;
+
+			case 'create_extension':
+				push(ddl.extensions, statement.extension);
+				break;
+			case 'drop_extension':
+				del(ddl.extensions, statement.extension);
+				break;
+
 			default:
 				assertUnreachable(statement);
 		}

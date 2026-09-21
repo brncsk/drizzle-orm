@@ -1,5 +1,5 @@
 import { escapeSingleQuotes, type Simplify, wrapWith } from '../../utils';
-import type { View } from './ddl';
+import type { Function, Trigger, View } from './ddl';
 import { defaultNameForPK, defaults, defaultToSQL, isDefaultAction, isSerialType, mapSerialToInt } from './grammar';
 import type { JsonStatement } from './statements';
 
@@ -999,6 +999,92 @@ const regrantPrivilegeConvertor = convertor('regrant_privilege', (st) => {
 	return [revokeStatement, grantStatement];
 });
 
+/** A function's qualified name, quoted. */
+const functionKey = (fn: { schema: string; name: string }) => `"${fn.schema}"."${fn.name}"`;
+
+/** A function's signature as `DROP FUNCTION` and `COMMENT ON FUNCTION` name it: the argument types alone. */
+const functionSignature = (fn: Function) => `${functionKey(fn)}(${fn.args.map((it) => it.type).join(', ')})`;
+
+/** A dollar-quote tag the body does not contain: `$fn$`, lengthened with underscores while the body contains it. */
+export const dollarTag = (body: string) => {
+	let tag = '$fn$';
+	while (body.includes(tag)) tag = `${tag.slice(0, -1)}_$`;
+	return tag;
+};
+
+/** `COMMENT ON FUNCTION`; a null comment removes the one there is. */
+const functionCommentStatement = (fn: Function) => {
+	const text = fn.comment === null ? 'NULL' : `'${escapeSingleQuotes(fn.comment)}'`;
+	return `COMMENT ON FUNCTION ${functionSignature(fn)} IS ${text};`;
+};
+
+const createFunctionStatement = (fn: Function, replace: boolean) => {
+	const args = fn.args.map((it) => `${it.name} ${it.type}`).join(', ');
+	const tag = dollarTag(fn.body);
+	const attributes = fn.attributes ? ` ${fn.attributes}` : '';
+	return `CREATE${replace ? ' OR REPLACE' : ''} FUNCTION ${
+		functionKey(fn)
+	}(${args}) RETURNS ${fn.returns} LANGUAGE ${fn.language}${attributes} AS ${tag}\n${fn.body}\n${tag};`;
+};
+
+const createFunctionConvertor = convertor('create_function', (st) => {
+	const statements = [createFunctionStatement(st.function, false)];
+	if (st.function.comment !== null) statements.push(functionCommentStatement(st.function));
+	return statements;
+});
+
+const replaceFunctionConvertor = convertor('replace_function', (st) => {
+	const statements = [createFunctionStatement(st.function, true)];
+	if (st.function.comment !== st.from.comment) statements.push(functionCommentStatement(st.function));
+	return statements;
+});
+
+const dropFunctionConvertor = convertor('drop_function', (st) => {
+	return `DROP FUNCTION ${functionSignature(st.function)};`;
+});
+
+const commentFunctionConvertor = convertor('comment_function', (st) => {
+	return functionCommentStatement(st.function);
+});
+
+const triggerTable = (trigger: Trigger) =>
+	trigger.schema !== 'public' ? `"${trigger.schema}"."${trigger.table}"` : `"${trigger.table}"`;
+
+/** `COMMENT ON TRIGGER`; a null comment removes the one there is. */
+const triggerCommentStatement = (trigger: Trigger) => {
+	const text = trigger.comment === null ? 'NULL' : `'${escapeSingleQuotes(trigger.comment)}'`;
+	return `COMMENT ON TRIGGER "${trigger.name}" ON ${triggerTable(trigger)} IS ${text};`;
+};
+
+const createTriggerConvertor = convertor('create_trigger', (st) => {
+	const { trigger, from } = st;
+	const [schema, name] = trigger.function.includes('.')
+		? trigger.function.split('.', 2)
+		: ['public', trigger.function];
+	const statements = [
+		`CREATE OR REPLACE TRIGGER "${trigger.name}" ${trigger.when} ON ${
+			triggerTable(trigger)
+		} FOR EACH ${trigger.level} EXECUTE FUNCTION "${schema}"."${name}"();`,
+	];
+	if (trigger.comment !== (from?.comment ?? null)) statements.push(triggerCommentStatement(trigger));
+	return statements;
+});
+
+const dropTriggerConvertor = convertor('drop_trigger', (st) => {
+	return `DROP TRIGGER "${st.trigger.name}" ON ${triggerTable(st.trigger)};`;
+});
+
+const createExtensionConvertor = convertor('create_extension', (st) => {
+	const { name, schema, version, cascade } = st.extension;
+	return `CREATE EXTENSION IF NOT EXISTS "${name}"${schema ? ` SCHEMA "${schema}"` : ''}${
+		version ? ` VERSION '${escapeSingleQuotes(version)}'` : ''
+	}${cascade ? ' CASCADE' : ''};`;
+});
+
+const dropExtensionConvertor = convertor('drop_extension', (st) => {
+	return `DROP EXTENSION "${st.extension.name}";`;
+});
+
 const createPolicyConvertor = convertor('create_policy', (st) => {
 	const { schema, table } = st.policy;
 	const policy = st.policy;
@@ -1131,6 +1217,14 @@ const convertors = [
 	grantPrivilegeConvertor,
 	revokePrivilegeConvertor,
 	regrantPrivilegeConvertor,
+	createFunctionConvertor,
+	replaceFunctionConvertor,
+	dropFunctionConvertor,
+	commentFunctionConvertor,
+	createTriggerConvertor,
+	dropTriggerConvertor,
+	createExtensionConvertor,
+	dropExtensionConvertor,
 	createPolicyConvertor,
 	dropPolicyConvertor,
 	renamePolicyConvertor,
