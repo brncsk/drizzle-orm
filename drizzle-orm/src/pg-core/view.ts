@@ -40,10 +40,21 @@ export class DefaultViewBuilderCore<
 
 	protected config: {
 		with?: ViewWithConfig;
+		comment?: string;
 	} = {};
 
 	with(config: ViewWithConfig): this {
 		this.config.with = config;
+		return this;
+	}
+
+	/**
+	 * The comment the view carries in the database (`COMMENT ON VIEW`).
+	 * drizzle-kit writes it when it creates the view and updates it on its
+	 * own when only the text changed.
+	 */
+	comment(comment: string): this {
+		this.config.comment = comment;
 		return this;
 	}
 }
@@ -213,7 +224,17 @@ export class MaterializedViewBuilderCore<
 		using?: string;
 		tablespace?: string;
 		withNoData?: boolean;
+		comment?: string;
 	} = {};
+
+	/**
+	 * The comment the materialized view carries in the database
+	 * (`COMMENT ON MATERIALIZED VIEW`).
+	 */
+	comment(comment: string): this {
+		this.config.comment = comment;
+		return this;
+	}
 
 	using(using: string): this {
 		this.config.using = using;
@@ -270,6 +291,7 @@ export class MaterializedViewBuilder<
 					using: this.config.using,
 					tablespace: this.config.tablespace,
 					withNoData: this.config.withNoData,
+					comment: this.config.comment,
 				},
 				config: {
 					name: this.name,
@@ -320,6 +342,7 @@ export class ManualMaterializedViewBuilder<
 					using: this.config.using,
 					with: this.config.with,
 					withNoData: this.config.withNoData,
+					comment: this.config.comment,
 				},
 				config: {
 					name: this.name,
@@ -351,6 +374,7 @@ export class ManualMaterializedViewBuilder<
 					using: this.config.using,
 					with: this.config.with,
 					withNoData: this.config.withNoData,
+					comment: this.config.comment,
 				},
 				config: {
 					name: this.name,
@@ -376,11 +400,13 @@ export class PgView<T extends ViewConfig = ViewConfig> extends PgViewBase<T> {
 
 	[PgViewConfig]: {
 		with?: ViewWithConfig;
+		comment?: string;
 	} | undefined;
 
 	constructor({ pgConfig, config }: {
 		pgConfig: {
 			with?: ViewWithConfig;
+			comment?: string;
 		} | undefined;
 		config: {
 			name: T['name'];
@@ -393,6 +419,7 @@ export class PgView<T extends ViewConfig = ViewConfig> extends PgViewBase<T> {
 		if (pgConfig) {
 			this[PgViewConfig] = {
 				with: pgConfig.with,
+				comment: pgConfig.comment,
 			};
 		}
 	}
@@ -415,6 +442,7 @@ export class PgMaterializedView<T extends ViewConfig = ViewConfig> extends PgVie
 		readonly using?: string;
 		readonly tablespace?: string;
 		readonly withNoData?: boolean;
+		readonly comment?: string;
 	} | undefined;
 
 	constructor({ pgConfig, config }: {
@@ -423,6 +451,7 @@ export class PgMaterializedView<T extends ViewConfig = ViewConfig> extends PgVie
 			using: string | undefined;
 			tablespace: string | undefined;
 			withNoData: boolean | undefined;
+			comment: string | undefined;
 		} | undefined;
 		config: {
 			name: T['name'];
@@ -437,6 +466,7 @@ export class PgMaterializedView<T extends ViewConfig = ViewConfig> extends PgVie
 			using: pgConfig?.using,
 			tablespace: pgConfig?.tablespace,
 			withNoData: pgConfig?.withNoData,
+			comment: pgConfig?.comment,
 		};
 	}
 }
