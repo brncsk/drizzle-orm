@@ -32,7 +32,7 @@ async function applyTransition(config: {
 	const { from, renames, to } = config;
 
 	const base: PostgresSnapshot = {
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id: 'snapshot-id',
 		prevIds: [originId],
@@ -2251,7 +2251,7 @@ describe('transition tests', () => {
 		const combinedStatements = [...statementsA, ...statementsB];
 
 		const base: PostgresSnapshot = {
-			version: '8',
+			version: '9',
 			dialect: 'postgres',
 			id: 'snapshot-id',
 			prevIds: [originId],

@@ -122,9 +122,28 @@ export const createDDL = () => {
 			using: 'string?',
 			withCheck: 'string?',
 		},
+		/*
+			`columns` is what the definition produces, as the declaration knows
+			it: the diff replaces a view in place (`CREATE OR REPLACE VIEW`) when
+			the new list keeps the old one as a prefix, which is the condition
+			Postgres puts on a replace, and drops and recreates it otherwise. An
+			empty list means the columns are not known (a selection that is not
+			a column, or a snapshot written before they were recorded), and an
+			unknown list is never proven compatible. `push` ignores the list,
+			as it ignores the definition.
+		*/
 		views: {
 			schema: 'required',
 			definition: 'string?',
+			columns: [
+				{
+					name: 'string',
+					type: 'string',
+					typeSchema: 'string?',
+					dimensions: 'number',
+				},
+			],
+			comment: 'string?',
 			with: {
 				checkOption: ['local', 'cascaded', null],
 				securityBarrier: 'boolean?',
@@ -179,6 +198,7 @@ export type CheckConstraint = PostgresEntities['checks'];
 export type Policy = PostgresEntities['policies'];
 export type View = PostgresEntities['views'];
 
+/** A column of a view as `pull` renders it; the view entity carries the subset the diff compares. */
 export type ViewColumn = {
 	schema: string;
 	view: string;

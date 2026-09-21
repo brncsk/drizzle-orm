@@ -183,6 +183,7 @@ export const fromDatabase = async (
 		rlsEnabled: boolean;
 		tablespaceid: number | string;
 		definition: string | null;
+		comment: string | null;
 	};
 	progressCallback('tables', 0, 'fetching');
 	const tablesList = filteredNamespacesStringForSQL
@@ -201,7 +202,8 @@ export const fromDatabase = async (
 					WHEN relkind OPERATOR(pg_catalog.=) 'v' OR relkind OPERATOR(pg_catalog.=) 'm'
 						THEN pg_catalog.pg_get_viewdef(pg_class.oid, true)
 					ELSE null
-				END as "definition"
+				END as "definition",
+				pg_catalog.obj_description(pg_class.oid, 'pg_class') AS "comment"
 			FROM
 				pg_catalog.pg_class
 			JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) relnamespace
@@ -1168,6 +1170,10 @@ export const fromDatabase = async (
 			schema: view.schema,
 			name: view.name,
 			definition,
+			columns: viewColumns
+				.filter((it) => it.schema === view.schema && it.view === view.name)
+				.map((it) => ({ name: it.name, type: it.type, typeSchema: it.typeSchema, dimensions: it.dimensions })),
+			comment: view.comment,
 			with: hasNonNullOpt ? opts : null,
 			materialized: view.kind === 'm',
 			tablespace,

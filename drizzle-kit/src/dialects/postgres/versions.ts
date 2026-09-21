@@ -19,9 +19,32 @@ import type {
 } from '../../dialects/postgres/snapshot';
 import { getOrNull } from '../../dialects/utils';
 
-export const upToV8 = (
+/** A version 8 snapshot: the ddl array of version 9 less what `upToV9` adds. */
+export type PostgresSnapshotV8 = Omit<PostgresSnapshot, 'version'> & { version: '8' };
+
+/**
+ * A snapshot brought up to version 9. A version 8 snapshot knows no columns
+ * and no comment for a view: its views get an empty column list, which the
+ * diff reads as not known, so the first change to such a view's definition
+ * drops and creates it rather than replacing it in place, and no comment.
+ * Its privileges are already in the version 9 shape, since every field
+ * that version 9 relaxed holds a value version 8 wrote.
+ */
+export const upToV9 = (
 	it: Record<string, any>,
 ): { snapshot: PostgresSnapshot; hints: string[] } => {
+	const { snapshot, hints } = Number(it.version) < 8 ? upToV8(it) : { snapshot: it as PostgresSnapshotV8, hints: [] };
+	const ddl = snapshot.ddl.map((entity) => {
+		if (entity.entityType !== 'views') return entity;
+		const { columns = [], comment = null, ...view } = entity as Partial<typeof entity> & typeof entity;
+		return { ...view, columns, comment };
+	});
+	return { snapshot: { ...snapshot, version: '9', ddl }, hints };
+};
+
+export const upToV8 = (
+	it: Record<string, any>,
+): { snapshot: PostgresSnapshotV8; hints: string[] } => {
 	if (Number(it.version) < 7) return upToV8(updateUpToV7(it));
 	const json = it as PgSchemaV7;
 
@@ -280,6 +303,8 @@ export const upToV8 = (
 			schema: v.schema,
 			name: v.name,
 			definition: v.definition ?? null,
+			columns: [],
+			comment: null,
 			tablespace: v.tablespace ?? null,
 			withNoData: v.withNoData ?? null,
 			using: v.using ?? null,

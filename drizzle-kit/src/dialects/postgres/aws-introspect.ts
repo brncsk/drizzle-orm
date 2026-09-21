@@ -1145,6 +1145,10 @@ export const fromDatabase = async (
 			schema: view.schema,
 			name: view.name,
 			definition,
+			columns: viewColumns
+				.filter((it) => it.schema === view.schema && it.view === view.name)
+				.map((it) => ({ name: it.name, type: it.type, typeSchema: it.typeSchema, dimensions: it.dimensions })),
+			comment: null,
 			with: hasNonNullOpt ? opts : null,
 			materialized: view.kind === 'm',
 			tablespace,

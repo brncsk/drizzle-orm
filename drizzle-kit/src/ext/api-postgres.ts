@@ -21,7 +21,7 @@ import type {
 } from '../dialects/postgres/ddl';
 import { createDDL, interimToDDL } from '../dialects/postgres/ddl';
 import type { PostgresSnapshot } from '../dialects/postgres/snapshot';
-import { upToV8 } from '../dialects/postgres/versions';
+import { upToV9 } from '../dialects/postgres/versions';
 import { originUUID } from '../utils';
 import type { DB } from '../utils';
 
@@ -246,4 +246,4 @@ export const startStudioServer = async (
 	});
 };
 
-export const up = upToV8;
+export const up = upToV9;

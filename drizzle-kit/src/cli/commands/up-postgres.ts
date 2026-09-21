@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { writeFileSync } from 'fs';
-import { upToV8 } from '../../dialects/postgres/versions';
+import { upToV9 } from '../../dialects/postgres/versions';
 import { prepareOutFolder, validateWithReport } from '../../utils/utils-node';
 import { outputFormat } from '../context';
 import { migrateToFoldersV3 } from './utils';
@@ -20,7 +20,7 @@ export const upPgHandler = (out: string): string[] => {
 		.forEach((it) => {
 			const path = it.path;
 
-			const { snapshot } = upToV8(it.raw);
+			const { snapshot } = upToV9(it.raw);
 
 			if (outputFormat() === 'text') console.log(`[${chalk.green('✓')}] ${path}`);
 

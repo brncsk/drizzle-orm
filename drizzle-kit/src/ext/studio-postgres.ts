@@ -130,6 +130,8 @@ const fromInterims = ({
 			with: null,
 			withNoData: null,
 			definition: it.definition,
+			columns: [],
+			comment: null,
 			materialized: it.materialized,
 			name: it.name,
 			schema: it.schema,

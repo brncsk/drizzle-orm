@@ -90,6 +90,7 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'set_new_schema',
 		'create_view',
 		'drop_view',
+		'replace_view',
 		'alter_view',
 		'rename_view',
 		'move_view',
@@ -157,6 +158,7 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'move_sequence',
 		'create_view',
 		'drop_view',
+		'replace_view',
 		'rename_view',
 		'alter_view',
 		'move_view',
@@ -504,35 +506,42 @@ class PostgresCommutativity extends AbstractCommutativity<
 
 			// View operations
 			create_view: {
-				conflicts: ['create_view', 'drop_view', 'rename_view', 'alter_view', 'move_view'],
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.view.schema, statement.view.name),
 					ancestors: [],
 				}),
 			},
 			drop_view: {
-				conflicts: ['create_view', 'drop_view', 'rename_view', 'alter_view', 'move_view'],
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.view.schema, statement.view.name),
 					ancestors: [],
 				}),
 			},
 			rename_view: {
-				conflicts: ['create_view', 'drop_view', 'rename_view', 'alter_view', 'move_view'],
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.from.schema, statement.from.name),
 					ancestors: [],
 				}),
 			},
 			alter_view: {
-				conflicts: ['create_view', 'drop_view', 'rename_view', 'alter_view', 'move_view'],
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.view.schema, statement.view.name),
+					ancestors: [],
+				}),
+			},
+			replace_view: {
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.view.schema, statement.view.name),
 					ancestors: [],
 				}),
 			},
 			move_view: {
-				conflicts: ['create_view', 'drop_view', 'rename_view', 'alter_view', 'move_view'],
+				conflicts: ['create_view', 'drop_view', 'replace_view', 'rename_view', 'alter_view', 'move_view'],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.fromSchema, statement.view.name),
 					ancestors: [],
@@ -723,6 +732,7 @@ class PostgresCommutativity extends AbstractCommutativity<
 	private viewLevelActions = new Set([
 		'create_view',
 		'drop_view',
+		'replace_view',
 		'alter_view',
 		'rename_view',
 		'move_view',

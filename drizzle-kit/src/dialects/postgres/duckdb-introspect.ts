@@ -851,6 +851,8 @@ export const fromDatabase = async (
 			schema: view.schema,
 			name: view.name,
 			definition,
+			columns: [],
+			comment: null,
 			with: null,
 			materialized: false,
 			tablespace: null,

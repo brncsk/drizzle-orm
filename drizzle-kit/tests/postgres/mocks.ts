@@ -886,7 +886,7 @@ export async function conflictsFromSchema(
 	const { ddl: parentDDL } = drizzleToDDL(parent.schema);
 
 	const parentSnapshot = {
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id: parent.id,
 		prevIds: parent.prevId ? [parent.prevId] : [],
