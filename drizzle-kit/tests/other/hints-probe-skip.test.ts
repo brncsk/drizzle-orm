@@ -61,6 +61,8 @@ const view = (name: string, schema = 'public', overrides: Partial<View> = {}) =>
 		schema,
 		name,
 		definition: null,
+		columns: [],
+		comment: null,
 		with: null,
 		withNoData: null,
 		using: null,

@@ -529,13 +529,18 @@ export type Index = TypeOf<typeof index>;
 export type TableV5 = TypeOf<typeof tableV5>;
 export type Column = TypeOf<typeof column>;
 
+/*
+	Version 9 records, per view, the columns its definition produces and its
+	comment, and holds a privilege on a schema as one with no table. See
+	`upToV9` in versions.ts for what a version 8 snapshot lacks.
+*/
 export const toJsonSnapshot = (ddl: PostgresDDL, prevIds: string[], renames: string[]): PostgresSnapshot => {
-	return { dialect: 'postgres', id: randomUUID(), prevIds, version: '8', ddl: ddl.entities.list(), renames };
+	return { dialect: 'postgres', id: randomUUID(), prevIds, version: '9', ddl: ddl.entities.list(), renames };
 };
 
 const ddl = createDDL();
 export const snapshotValidator = validator({
-	version: ['8'],
+	version: ['9'],
 	dialect: ['postgres'],
 	id: 'string',
 	prevIds: array<string>((_) => true),
@@ -553,7 +558,7 @@ export type PostgresSnapshot = typeof snapshotValidator.shape;
 
 export const drySnapshot = snapshotValidator.strict(
 	{
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id: originUUID,
 		prevIds: [],

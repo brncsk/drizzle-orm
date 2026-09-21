@@ -7,7 +7,7 @@ const baseId = '00000000-0000-0000-0000-000000000000';
 
 function makeSnapshot(id: string, prevIds: string[], ddlEntities: any[] = []): PostgresSnapshot {
 	return {
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id,
 		prevIds,

@@ -425,6 +425,7 @@ export const ddlToTypeScript = (
 			let statement = `export const ${withCasing(paramName, casing)} = ${func}("${it.name}", {${columns}})`;
 			statement += tablespace ? `.tablespace("${tablespace}")` : '';
 			statement += Object.keys(withOption).length > 0 ? `.with(${JSON.stringify(withOption)})` : '';
+			statement += it.comment !== null ? `.comment(${escapeForTsLiteral(it.comment)})` : '';
 			statement += `.as(${as});`;
 
 			return statement;

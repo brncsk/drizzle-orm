@@ -221,7 +221,7 @@ const assertVersion = (
 };
 
 const postgresValidator = (snapshot: object): ValidationResult => {
-	const versionError = assertVersion(snapshot, 8);
+	const versionError = assertVersion(snapshot, 9);
 	if (versionError) return { status: versionError };
 
 	const res = pgSnapshotValidator.parse(snapshot);

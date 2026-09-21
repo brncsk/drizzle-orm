@@ -2267,6 +2267,27 @@ export const defaultsCommutative = (
 	return false;
 };
 
+type ViewColumnShape = { name: string; type: string; typeSchema: string | null; dimensions: number };
+
+/**
+ * Whether `CREATE OR REPLACE VIEW` can turn the view with the `from`
+ * columns into one with the `to` columns: Postgres keeps every existing
+ * column in place, with its name and type, and accepts new columns at the
+ * end only. Columns that are not known (an empty list on either side)
+ * cannot be proven compatible, so the answer is no.
+ */
+export const viewColumnsReplaceable = (from: ViewColumnShape[], to: ViewColumnShape[]) => {
+	if (from.length === 0 || to.length === 0) return false;
+	if (to.length < from.length) return false;
+	return from.every((it, i) => {
+		const other = to[i]!;
+		return it.name === other.name
+			&& it.type === other.type
+			&& it.typeSchema === other.typeSchema
+			&& it.dimensions === other.dimensions;
+	});
+};
+
 export const existsInViewDef = (
 	view1: { name: string; schema: string },
 	view2: { name: string; schema: string; definition: string | null },

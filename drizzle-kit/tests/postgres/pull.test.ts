@@ -1805,6 +1805,8 @@ test('introspect view with table filter', async () => {
 			schema: 'public',
 			name: 'view1',
 			definition: 'SELECT column1 FROM table1',
+			columns: [{ name: 'column1', type: 'integer', typeSchema: null, dimensions: 0 }],
+			comment: null,
 			with: null,
 			materialized: false,
 			tablespace: null,

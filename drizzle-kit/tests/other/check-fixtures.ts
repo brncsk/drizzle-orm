@@ -7,7 +7,7 @@ import { drizzleToDDL, type PostgresSchema } from '../postgres/mocks';
 export const ORIGIN = '00000000-0000-0000-0000-000000000000';
 
 export const makePgSnapshot = (id: string, prevIds: string[], schema: PostgresSchema): PostgresSnapshot => ({
-	version: '8',
+	version: '9',
 	dialect: 'postgres',
 	id,
 	prevIds,

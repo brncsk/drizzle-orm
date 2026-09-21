@@ -365,7 +365,19 @@ export interface JsonCreateView {
 export interface JsonDropView {
 	type: 'drop_view';
 	view: View;
+	/** The view as it was, when the drop is the first half of a recreate; null when the view is gone from the schema. */
 	cause: View | null;
+}
+
+/**
+ * `CREATE OR REPLACE VIEW`: the definition changed and the new column list
+ * keeps the old one as a prefix, so Postgres can replace the view in place
+ * and the views that select from it, and its privileges, stay as they are.
+ */
+export interface JsonReplaceView {
+	type: 'replace_view';
+	view: View;
+	from: View;
 }
 
 export interface JsonRenameView {
@@ -443,6 +455,7 @@ export type JsonStatement =
 	| JsonRegrantPrivilege
 	| JsonCreateView
 	| JsonDropView
+	| JsonReplaceView
 	| JsonRenameView
 	| JsonDropValueFromEnum
 	| JsonAlterCheck

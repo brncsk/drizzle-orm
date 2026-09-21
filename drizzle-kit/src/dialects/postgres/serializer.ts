@@ -73,7 +73,7 @@ export const prepareSnapshot = async (
 	const prevIds = mergeLeafIds ?? [prevSnapshot.id];
 
 	const snapshot = {
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id,
 		prevIds,
@@ -694,6 +694,9 @@ export function generateLatestSnapshot(
 				break;
 			case 'drop_view':
 				del(ddl.views, statement.view);
+				break;
+			case 'replace_view':
+				replace(ddl.views, statement.from, statement.view);
 				break;
 			case 'rename_view':
 				ddl.views.update({

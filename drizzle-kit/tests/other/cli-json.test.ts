@@ -1156,7 +1156,7 @@ describe('check --output', () => {
 		const out = stageOut();
 		// Correct version but a structurally invalid body trips the `malformed` validator status.
 		writeSnapshot(out, '0000_init', {
-			version: '8',
+			version: '9',
 			dialect: 'postgres',
 			id: 'p1',
 			prevIds: [ORIGIN],
@@ -1393,7 +1393,7 @@ describe('pull json envelopes', () => {
 		const meta = join(out, tag);
 		mkdirSync(meta, { recursive: true });
 		const snapshotPath = join(meta, 'snapshot.json');
-		writeFileSync(snapshotPath, JSON.stringify({ version: '8', dialect: 'postgres', id: tag, prevIds: [], ddl: [] }));
+		writeFileSync(snapshotPath, JSON.stringify({ version: '9', dialect: 'postgres', id: tag, prevIds: [], ddl: [] }));
 		return snapshotPath;
 	};
 

@@ -17,7 +17,7 @@ function makeSnapshot(
 	schema: PostgresSchema,
 ): PostgresSnapshot {
 	return {
-		version: '8',
+		version: '9',
 		dialect: 'postgres',
 		id,
 		prevIds,

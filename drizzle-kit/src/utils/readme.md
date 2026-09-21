@@ -11,7 +11,7 @@ Input we will go through, 3 migrations, where 2 and 3 where creating the same ta
 First migration
 ```json
 {
-  version: "8",
+  version: "9",
   dialect: "postgres",
   id: "p1",
   prevId: "00000000-0000-0000-0000-000000000000",
@@ -23,7 +23,7 @@ First migration
 Second migration(done in branch1)
 ```json
 {
-  version: "8",
+  version: "9",
   dialect: "postgres",
   id: "a1",
   prevId: "p1",
@@ -56,7 +56,7 @@ Second migration(done in branch1)
 Third migration(done in branch2)
 ```json
 {
-  version: "8",
+  version: "9",
   dialect: "postgres",
   id: "a1",
   prevId: "p1",
