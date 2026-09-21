@@ -7,6 +7,7 @@ export * from './codecs.ts';
 export * from './columns/index.ts';
 export * from './dialect.ts';
 export * from './foreign-keys.ts';
+export * from './grants.ts';
 export * from './indexes.ts';
 export * from './policies.ts';
 export * from './primary-keys.ts';
