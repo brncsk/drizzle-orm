@@ -4,7 +4,9 @@ import type {
 	Column,
 	DiffEntities,
 	Enum,
+	Extension,
 	ForeignKey,
+	Function,
 	Index,
 	Policy,
 	PrimaryKey,
@@ -13,6 +15,7 @@ import type {
 	Schema,
 	Sequence,
 	Table,
+	Trigger,
 	UniqueConstraint,
 	View,
 } from './ddl';
@@ -399,6 +402,53 @@ export interface JsonAlterView {
 	view: View;
 }
 
+export interface JsonCreateFunction {
+	type: 'create_function';
+	function: Function;
+}
+
+/** `CREATE OR REPLACE FUNCTION`: the signature stands, the body, the attributes or both changed. */
+export interface JsonReplaceFunction {
+	type: 'replace_function';
+	function: Function;
+	from: Function;
+}
+
+export interface JsonDropFunction {
+	type: 'drop_function';
+	function: Function;
+	/** The function as it will be, when the drop is the first half of a recreate; null when the function is gone from the schema. */
+	cause: Function | null;
+}
+
+/** `COMMENT ON FUNCTION`: the comment alone changed. */
+export interface JsonCommentFunction {
+	type: 'comment_function';
+	function: Function;
+}
+
+/** `CREATE OR REPLACE TRIGGER`: a new trigger, or one whose timing, level, function or comment changed. */
+export interface JsonCreateTrigger {
+	type: 'create_trigger';
+	trigger: Trigger;
+	from: Trigger | null;
+}
+
+export interface JsonDropTrigger {
+	type: 'drop_trigger';
+	trigger: Trigger;
+}
+
+export interface JsonCreateExtension {
+	type: 'create_extension';
+	extension: Extension;
+}
+
+export interface JsonDropExtension {
+	type: 'drop_extension';
+	extension: Extension;
+}
+
 export type JsonStatement =
 	| JsonCreateTable
 	| JsonDropTable
@@ -457,6 +507,14 @@ export type JsonStatement =
 	| JsonDropView
 	| JsonReplaceView
 	| JsonRenameView
+	| JsonCreateFunction
+	| JsonReplaceFunction
+	| JsonDropFunction
+	| JsonCommentFunction
+	| JsonCreateTrigger
+	| JsonDropTrigger
+	| JsonCreateExtension
+	| JsonDropExtension
 	| JsonDropValueFromEnum
 	| JsonAlterCheck
 	| JsonRecreateIndex;

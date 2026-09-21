@@ -165,6 +165,9 @@ const fromInterims = ({
 		roles,
 		privileges,
 		policies,
+		functions: [],
+		triggers: [],
+		extensions: [],
 	};
 };
 

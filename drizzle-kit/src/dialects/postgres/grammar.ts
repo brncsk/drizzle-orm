@@ -2323,6 +2323,30 @@ export const existsInViewDef = (
 	return candidates.some((candidate) => view2.definition?.includes(candidate));
 };
 
+/**
+ * Whether a SQL text calls the function: its name, qualified or bare in
+ * `public`, quoted or not, followed by an opening parenthesis. What a
+ * view's definition, an index expression or another function's body is
+ * searched for when the function is dropped and created again.
+ */
+export const callsFunction = (
+	fn: { name: string; schema: string },
+	text: string | null,
+) => {
+	if (!text) return false;
+	const names = fn.schema !== 'public'
+		? [
+			`"${fn.schema}"."${fn.name}"`,
+			`${fn.schema}."${fn.name}"`,
+			`"${fn.schema}".${fn.name}`,
+			`${fn.schema}.${fn.name}`,
+		]
+		: [`"${fn.name}"`, fn.name, `public."${fn.name}"`, `public.${fn.name}`];
+	return names.some((name) => new RegExp(`(^|[^\\w."])${escapeRegExp(name)}\\s*\\(`).test(text));
+};
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export const defaults = {
 	/*
 			By default, PostgreSQL uses the cluster’s default tablespace (which is named 'pg_default')

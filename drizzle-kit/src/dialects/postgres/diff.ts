@@ -13,6 +13,7 @@ import type {
 	DiffEntities,
 	Enum,
 	ForeignKey,
+	Function,
 	Index,
 	IndexColumn,
 	Policy,
@@ -23,11 +24,13 @@ import type {
 	Role,
 	Schema,
 	Sequence,
+	Trigger,
 	UniqueConstraint,
 	View,
 } from './ddl';
 import { createDDL, tableFromDDL } from './ddl';
 import {
+	callsFunction,
 	defaults,
 	defaultsCommutative,
 	existsInViewDef,
@@ -242,6 +245,17 @@ export const ddlDiff = async (
 		created: privilegesDiff.filter((it) => it.$diffType === 'create'),
 		deleted: privilegesDiff.filter((it) => it.$diffType === 'drop'),
 	});
+
+	// a function, a trigger or an extension is never renamed: a new name is a drop and a create
+	const functionsDiff = diff(ddl1, ddl2, 'functions');
+	const createdFunctions = functionsDiff.filter((it) => it.$diffType === 'create');
+	const deletedFunctions = functionsDiff.filter((it) => it.$diffType === 'drop');
+	const triggersDiff = diff(ddl1, ddl2, 'triggers');
+	const createdTriggers = triggersDiff.filter((it) => it.$diffType === 'create');
+	const deletedTriggers = triggersDiff.filter((it) => it.$diffType === 'drop');
+	const extensionsDiff = diff(ddl1, ddl2, 'extensions');
+	const createdExtensions = extensionsDiff.filter((it) => it.$diffType === 'create');
+	const deletedExtensions = extensionsDiff.filter((it) => it.$diffType === 'drop');
 
 	const tablesDiff = diff(ddl1, ddl2, 'tables');
 	const {
@@ -1116,6 +1130,88 @@ export const ddlDiff = async (
 		prepareStatement('regrant_privilege', { privilege: it.$right, diff: it })
 	);
 
+	/*
+		A function whose body, attributes or comment changed is replaced in
+		place; one whose signature changed (its parameters, its return type or
+		its language) is dropped and created again, since `CREATE OR REPLACE`
+		cannot change a signature. Postgres refuses to drop a function that a
+		trigger, an index or a view depends on, so those are dropped before it
+		and created after it: the triggers that call it, the indexes whose
+		expression calls it, and the views whose definition calls it, which
+		join the views to recreate below and take their dependents with them.
+	*/
+	const functionAlters = alters.filter((it): it is DiffEntities['functions'] => it.entityType === 'functions');
+	const signatureChanged = (it: DiffEntities['functions']) => !!(it.args || it.returns || it.language);
+	const functionsToRecreate = functionAlters.filter(signatureChanged).map((it) => ({ from: it.$left, to: it.$right }));
+	const recreatedFunction = (fn: { schema: string; name: string }) =>
+		functionsToRecreate.some((r) => r.to.schema === fn.schema && r.to.name === fn.name);
+
+	const jsonReplaceFunctions = functionAlters
+		.filter((it) => !signatureChanged(it) && (it.body || it.attributes))
+		.map((it) => prepareStatement('replace_function', { function: it.$right, from: it.$left }));
+	const jsonCommentFunctions = functionAlters
+		.filter((it) => !signatureChanged(it) && !it.body && !it.attributes && it.comment)
+		.map((it) => prepareStatement('comment_function', { function: it.$right }));
+
+	// created in the order the schema declares them, since a SQL body is checked when its function is created, and dropped in the reverse
+	const isNewFunction = (fn: Function) =>
+		createdFunctions.some((c) => c.schema === fn.schema && c.name === fn.name) || recreatedFunction(fn);
+	const jsonCreateFunctions = ddl2.functions.list().filter(isNewFunction).map((it) =>
+		prepareStatement('create_function', { function: it })
+	);
+	const jsonDropFunctions = ddl1.functions
+		.list()
+		.filter((it) => deletedFunctions.some((d) => d.schema === it.schema && d.name === it.name) || recreatedFunction(it))
+		.reverse()
+		.map((it) =>
+			prepareStatement('drop_function', {
+				function: it,
+				cause: functionsToRecreate.find((r) => r.from.schema === it.schema && r.from.name === it.name)?.to ?? null,
+			})
+		);
+
+	const triggerAlters = alters.filter((it): it is DiffEntities['triggers'] => it.entityType === 'triggers');
+	const sameTrigger = (a: Trigger, b: Trigger) => a.schema === b.schema && a.table === b.table && a.name === b.name;
+	// a trigger that calls a function that is dropped, whether for good or to be created again, is dropped before it and created again after it when the schema still declares it
+	const goneFunctions = new Set(
+		[...deletedFunctions, ...functionsToRecreate.map((r) => r.from)].map((fn) => `${fn.schema}.${fn.name}`),
+	);
+	const triggersToDrop = ddl1.triggers.list().filter((it) =>
+		goneFunctions.has(it.function) && !deletedTriggers.some((d) => sameTrigger(d, it))
+	);
+	const droppedTrigger = (it: Trigger) => triggersToDrop.some((d) => sameTrigger(d, it));
+	// a trigger on a dropped table goes with the table
+	const jsonDropTriggers = [
+		...deletedTriggers
+			.filter((it) => ddl2.tables.one({ schema: it.schema, name: it.table }))
+			.map((it) => prepareStatement('drop_trigger', { trigger: it })),
+		...triggersToDrop.map((it) => prepareStatement('drop_trigger', { trigger: it })),
+	];
+	const jsonCreateTriggers = [
+		...createdTriggers.map((it) => prepareStatement('create_trigger', { trigger: it, from: null })),
+		...triggerAlters.map((it) =>
+			prepareStatement('create_trigger', { trigger: it.$right, from: droppedTrigger(it.$left) ? null : it.$left })
+		),
+		...ddl2.triggers
+			.list()
+			.filter((it) =>
+				droppedTrigger(it)
+				&& !createdTriggers.some((c) => sameTrigger(c, it))
+				&& !triggerAlters.some((a) => sameTrigger(a.$right, it))
+			)
+			.map((it) => prepareStatement('create_trigger', { trigger: it, from: null })),
+	];
+
+	const extensionAlters = alters.filter((it): it is DiffEntities['extensions'] => it.entityType === 'extensions');
+	const jsonCreateExtensions = [
+		...createdExtensions.map((it) => prepareStatement('create_extension', { extension: it })),
+		...extensionAlters.map((it) => prepareStatement('create_extension', { extension: it.$right })),
+	];
+	const jsonDropExtensions = [
+		...deletedExtensions.map((it) => prepareStatement('drop_extension', { extension: it })),
+		...extensionAlters.map((it) => prepareStatement('drop_extension', { extension: it.$left })),
+	];
+
 	const createSchemas = createdSchemas.map((it) => prepareStatement('create_schema', it));
 	const dropSchemas = deletedSchemas.map((it) => prepareStatement('drop_schema', it));
 	const renameSchemas = renamedSchemas.map((it) => prepareStatement('rename_schema', it));
@@ -1218,6 +1314,14 @@ export const ddlDiff = async (
 		viewsToRecreate.push({ from, to: it });
 	});
 
+	// a view whose definition calls a function that is dropped and created again is recreated with it
+	for (const candidate of ddl2.views.list()) {
+		if (createdViews.some((c) => c.schema === candidate.schema && c.name === candidate.name)) continue;
+		if (viewsToRecreate.some((r) => r.to.schema === candidate.schema && r.to.name === candidate.name)) continue;
+		if (!functionsToRecreate.some((r) => callsFunction(r.from, candidate.definition))) continue;
+		viewsToRecreate.push({ from: originalView(candidate), to: candidate });
+	}
+
 	// the closure over the views that select from a recreated one
 	const isCreated = (it: View) => createdViews.some((c) => c.schema === it.schema && c.name === it.name);
 	for (let added = true; added;) {
@@ -1262,6 +1366,19 @@ export const ddlDiff = async (
 		)
 	);
 
+	// an index whose expression or predicate calls a function that is dropped and created again is recreated with it
+	for (const index of ddl2.indexes.list()) {
+		if (indexesCreates.some((c) => c.schema === index.schema && c.table === index.table && c.name === index.name)) {
+			continue;
+		}
+		const calls = functionsToRecreate.some((r) =>
+			index.columns.some((c) => c.isExpression && callsFunction(r.from, c.value)) || callsFunction(r.from, index.where)
+		);
+		if (!calls) continue;
+		jsonDropIndexes.push(prepareStatement('drop_index', { index }));
+		jsonCreateIndexes.push(prepareStatement('create_index', { index }));
+	}
+
 	const columnsToRecreate = columnAlters.filter((it) => it.generated && it.generated.to !== null).filter((it) => {
 		// if push and definition changed
 		return !(it.generated?.to && it.generated.from && mode === 'push');
@@ -1299,6 +1416,8 @@ export const ddlDiff = async (
 
 	jsonStatements.push(...createSchemas);
 	jsonStatements.push(...renameSchemas);
+	// an extension is created once the schema it is installed in exists, and before anything that may need its types
+	jsonStatements.push(...jsonCreateExtensions);
 	jsonStatements.push(...jsonCreateEnums);
 	jsonStatements.push(...jsonMoveEnums);
 	jsonStatements.push(...jsonRenameEnums);
@@ -1320,6 +1439,8 @@ export const ddlDiff = async (
 
 	jsonStatements.push(...jsonDropViews);
 	jsonStatements.push(...jsonRecreateDropViews);
+	// a trigger is dropped before the function it calls, and before its table is renamed or dropped
+	jsonStatements.push(...jsonDropTriggers);
 	jsonStatements.push(...jsonRenameViews);
 	jsonStatements.push(...jsonMoveViews);
 	jsonStatements.push(...jsonAlterViews);
@@ -1342,6 +1463,8 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonRenameIndexes);
 	jsonStatements.push(...jsonDropIndexes);
 	jsonStatements.push(...jsonDropPrimaryKeys);
+	// a function is dropped once nothing depends on it: its triggers, the indexes and the views that call it are gone by now
+	jsonStatements.push(...jsonDropFunctions);
 
 	jsonStatements.push(...jsonRenameReferences);
 	jsonStatements.push(...jsonAddColumnsStatemets);
@@ -1353,6 +1476,11 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonDropColumnsStatemets);
 	jsonStatements.push(...jsonAlteredPKs);
 	jsonStatements.push(...jsonAlterColumns);
+
+	// a function is created once the tables and columns its body reads exist, and before the indexes and views that call it
+	jsonStatements.push(...jsonCreateFunctions);
+	jsonStatements.push(...jsonReplaceFunctions);
+	jsonStatements.push(...jsonCommentFunctions);
 
 	jsonStatements.push(...jsonRecreateIndex);
 
@@ -1382,12 +1510,17 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonAlterPrivileges);
 	jsonStatements.push(...jsonRegrantRecreatedViews);
 
+	// a trigger is created once its table and its function exist
+	jsonStatements.push(...jsonCreateTriggers);
+
 	jsonStatements.push(...jsonRenamePoliciesStatements);
 	jsonStatements.push(...jsonCreatePoliciesStatements);
 	jsonStatements.push(...jsonAlterOrRecreatePoliciesStatements);
 
 	jsonStatements.push(...jsonDropEnums);
 	jsonStatements.push(...dropSequences);
+	// an extension is dropped last, once nothing of the schema uses its types
+	jsonStatements.push(...jsonDropExtensions);
 	jsonStatements.push(...dropSchemas);
 
 	const { groupedStatements, sqlStatements } = fromJson(jsonStatements);

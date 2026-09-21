@@ -379,6 +379,37 @@ export const psqlExplain = (st: StatementPostgres) => {
 		if (from.comment !== to.comment) cause += `│ comment: [${from.comment}] -> [${to.comment}]\n`;
 	}
 
+	if (st.type === 'replace_function') {
+		const { from, function: to } = st;
+
+		const key = `${to.schema}.${to.name}`;
+		title += `${key} function replaced:`;
+		if (from.body !== to.body) cause += `│ body changed\n`;
+		if (from.attributes !== to.attributes) cause += `│ attributes: [${from.attributes}] -> [${to.attributes}]\n`;
+		if (from.comment !== to.comment) cause += `│ comment: [${from.comment}] -> [${to.comment}]\n`;
+	}
+
+	if (st.type === 'drop_function' && st.cause) {
+		const { cause: to, function: from } = st;
+
+		const key = `${to.schema}.${to.name}`;
+		title += `${key} function signature changed:`;
+		const signature = (fn: typeof to) =>
+			`(${fn.args.map((a) => `${a.name} ${a.type}`).join(', ')}) RETURNS ${fn.returns} LANGUAGE ${fn.language}`;
+		cause += `│ ${signature(from)} -> ${signature(to)}\n`;
+	}
+
+	if (st.type === 'create_trigger' && st.from) {
+		const { from, trigger: to } = st;
+
+		const key = `${to.schema}.${to.table}.${to.name}`;
+		title += `${key} trigger replaced:`;
+		if (from.when !== to.when) cause += `│ when: [${from.when}] -> [${to.when}]\n`;
+		if (from.level !== to.level) cause += `│ level: [${from.level}] -> [${to.level}]\n`;
+		if (from.function !== to.function) cause += `│ function: [${from.function}] -> [${to.function}]\n`;
+		if (from.comment !== to.comment) cause += `│ comment: [${from.comment}] -> [${to.comment}]\n`;
+	}
+
 	if (st.type === 'regrant_privilege') {
 		const { privilege, diff } = st;
 
@@ -1036,6 +1067,31 @@ export const postgresSchemaError = (error: PostgresSchemaError): string => {
 		const schemaName = chalk.underline.blue(`'${name}'`);
 		return withStyle.errorWarning(
 			`There's a duplicate schema name ${schemaName}`,
+		);
+	}
+
+	if (error.type === 'function_duplicate') {
+		const { schema, name } = error;
+		const functionName = chalk.underline.blue(`'${schema}.${name}'`);
+		return withStyle.errorWarning(
+			`There's a duplicate function ${functionName}; a function is one name in its schema, without overloads`,
+		);
+	}
+
+	if (error.type === 'trigger_duplicate') {
+		const { schema, table, name } = error;
+		const triggerName = chalk.underline.blue(`'${name}'`);
+		const tableName = chalk.underline.blue(`'${schema}.${table}'`);
+		return withStyle.errorWarning(
+			`There's a duplicate trigger ${triggerName} on ${tableName}`,
+		);
+	}
+
+	if (error.type === 'extension_duplicate') {
+		const { name } = error;
+		const extensionName = chalk.underline.blue(`'${name}'`);
+		return withStyle.errorWarning(
+			`There's a duplicate extension ${extensionName}`,
 		);
 	}
 
