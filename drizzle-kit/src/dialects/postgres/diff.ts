@@ -1103,7 +1103,15 @@ export const ddlDiff = async (
 	);
 
 	const jsonGrantPrivileges = createdPrivileges.map((it) => prepareStatement('grant_privilege', { privilege: it }));
-	const jsonRevokePrivileges = deletedPrivileges.map((it) => prepareStatement('revoke_privilege', { privilege: it }));
+	// a privilege on an object that is dropped goes with the object
+	const jsonRevokePrivileges = deletedPrivileges
+		.filter((it) =>
+			it.table === null
+				? it.schema === 'public' || ddl2.schemas.one({ name: it.schema })
+				: ddl2.tables.one({ schema: it.schema, name: it.table })
+					|| ddl2.views.one({ schema: it.schema, name: it.table })
+		)
+		.map((it) => prepareStatement('revoke_privilege', { privilege: it }));
 	const jsonAlterPrivileges = alters.filter((it) => it.entityType === 'privileges').map((it) =>
 		prepareStatement('regrant_privilege', { privilege: it.$right, diff: it })
 	);
@@ -1173,7 +1181,8 @@ export const ddlDiff = async (
 		then stay as they are. Otherwise the view is dropped and created
 		again, and so is every view that selects from it, since Postgres
 		refuses to drop a view another one depends on: the dependents are
-		dropped first and created last, in dependency order.
+		dropped first and created last, in dependency order, and the
+		privileges they lost with the drop are granted again.
 	*/
 	const viewsToRecreate: { from: View; to: View }[] = [];
 
@@ -1246,6 +1255,13 @@ export const ddlDiff = async (
 		});
 	createViews.push(...viewsToRecreate.map((r) => prepareStatement('create_view', { view: r.to })));
 
+	// DROP VIEW took the privileges on the view with it
+	const jsonRegrantRecreatedViews = viewsToRecreate.flatMap((r) =>
+		ddl2.privileges.list({ schema: r.to.schema, table: r.to.name }).map((privilege) =>
+			prepareStatement('grant_privilege', { privilege })
+		)
+	);
+
 	const columnsToRecreate = columnAlters.filter((it) => it.generated && it.generated.to !== null).filter((it) => {
 		// if push and definition changed
 		return !(it.generated?.to && it.generated.from && mode === 'push');
@@ -1299,8 +1315,6 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonAlterRoles);
 
 	jsonStatements.push(...jsonRevokePrivileges);
-	jsonStatements.push(...jsonGrantPrivileges);
-	jsonStatements.push(...jsonAlterPrivileges);
 
 	jsonStatements.push(...createTables);
 
@@ -1362,6 +1376,11 @@ export const ddlDiff = async (
 	const sortedCreateViews = sortViewsByDependency(createViews, (node, other) => existsInViewDef(other.view, node.view));
 
 	jsonStatements.push(...sortedCreateViews);
+
+	// a privilege is granted once what it is granted on exists
+	jsonStatements.push(...jsonGrantPrivileges);
+	jsonStatements.push(...jsonAlterPrivileges);
+	jsonStatements.push(...jsonRegrantRecreatedViews);
 
 	jsonStatements.push(...jsonRenamePoliciesStatements);
 	jsonStatements.push(...jsonCreatePoliciesStatements);

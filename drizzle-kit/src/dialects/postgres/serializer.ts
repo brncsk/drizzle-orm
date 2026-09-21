@@ -694,6 +694,8 @@ export function generateLatestSnapshot(
 				break;
 			case 'drop_view':
 				del(ddl.views, statement.view);
+				// the privileges on a view go with it; a recreate grants them again
+				ddl.privileges.delete({ schema: statement.view.schema, table: statement.view.name });
 				break;
 			case 'replace_view':
 				replace(ddl.views, statement.from, statement.view);

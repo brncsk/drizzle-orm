@@ -1,7 +1,8 @@
 import type { Resolver } from '../dialects/common';
 
 export const mockResolver =
-	<T extends { name: string; table?: string; schema?: string }>(renames: Set<string>): Resolver<T> => async (it) => {
+	<T extends { name: string; table?: string | null; schema?: string }>(renames: Set<string>): Resolver<T> =>
+	async (it) => {
 		const { created, deleted } = it;
 
 		if (created.length === 0 || deleted.length === 0 || renames.size === 0) {

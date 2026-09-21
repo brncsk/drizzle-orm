@@ -27,6 +27,7 @@ import {
 	PgGeometry,
 	PgGeometryObject,
 	PgGeometryTuple,
+	PgGrant,
 	PgLineABC,
 	PgLineTuple,
 	PgPointObject,
@@ -40,6 +41,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { assertUnreachable } from '../../utils';
 import { loadModule } from '../../utils/utils-node';
+import { granteeName } from '../drizzle';
 import type { EntityFilter } from '../pull-utils';
 import { getOrNull } from '../utils';
 import type {
@@ -54,6 +56,7 @@ import type {
 	Policy,
 	PostgresEntities,
 	PrimaryKey,
+	Privilege,
 	Schema,
 	SchemaError,
 	SchemaWarning,
@@ -70,6 +73,7 @@ import {
 	maxRangeForIdentityBasedOn,
 	minRangeForIdentityBasedOn,
 	Point,
+	privilegeName,
 	splitSqlType,
 	stringFromIdentityProperty,
 	trimDefaultValueSuffix,
@@ -256,6 +260,7 @@ export const fromDrizzleSchema = (
 		policies: PgPolicy[];
 		views: PgView[];
 		matViews: PgMaterializedView[];
+		grants: PgGrant[];
 	},
 	filter: EntityFilter,
 ): {
@@ -787,6 +792,36 @@ export const fromDrizzleSchema = (
 		});
 	}
 
+	for (const grant of schema.grants) {
+		const on = grant.on;
+		const target = is(on, PgSchema)
+			? { schema: on.schemaName, table: null }
+			: is(on, PgTable)
+			? { schema: getTableConfig(on).schema ?? 'public', table: getTableName(on) }
+			: is(on, PgView)
+			? { schema: getViewConfig(on).schema ?? 'public', table: getViewConfig(on).name }
+			: { schema: getMaterializedViewConfig(on).schema ?? 'public', table: getMaterializedViewConfig(on).name };
+
+		if (target.table === null) {
+			if (!filter({ type: 'schema', name: target.schema })) continue;
+		} else if (!filter({ type: 'table', schema: target.schema, name: target.table })) continue;
+
+		const grantee = granteeName(grant.to);
+		for (const privilege of grant.privileges) {
+			const type = privilege.toUpperCase() as Privilege['type'];
+			res.privileges.push({
+				entityType: 'privileges',
+				name: privilegeName({ grantor: null, grantee, schema: target.schema, table: target.table, type }),
+				grantor: null,
+				grantee,
+				schema: target.schema,
+				table: target.table,
+				type,
+				isGrantable: grant.withGrantOption,
+			});
+		}
+	}
+
 	res.enums = schema.enums.map<Enum>((e) => {
 		return {
 			entityType: 'enums',
@@ -812,6 +847,7 @@ export const fromExports = (exports: Record<string, unknown>) => {
 	const policies: PgPolicy[] = [];
 	const views: PgView[] = [];
 	const matViews: PgMaterializedView[] = [];
+	const grants: PgGrant[] = [];
 	const relations: Relations[] = [];
 
 	const i0values = Object.values(exports);
@@ -848,6 +884,10 @@ export const fromExports = (exports: Record<string, unknown>) => {
 			policies.push(t);
 		}
 
+		if (is(t, PgGrant)) {
+			grants.push(t);
+		}
+
 		if (is(t, Relations)) {
 			relations.push(t);
 		}
@@ -862,6 +902,7 @@ export const fromExports = (exports: Record<string, unknown>) => {
 		matViews,
 		roles,
 		policies,
+		grants,
 		relations,
 	};
 };
@@ -875,6 +916,7 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 	const roles: PgRole[] = [];
 	const policies: PgPolicy[] = [];
 	const matViews: PgMaterializedView[] = [];
+	const grants: PgGrant[] = [];
 	const relations: Relations[] = [];
 
 	for (let i = 0; i < imports.length; i++) {
@@ -891,6 +933,7 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 		matViews.push(...prepared.matViews);
 		roles.push(...prepared.roles);
 		policies.push(...prepared.policies);
+		grants.push(...prepared.grants);
 		relations.push(...prepared.relations);
 	}
 
@@ -903,6 +946,7 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 		matViews,
 		roles,
 		policies,
+		grants,
 		relations,
 	};
 };

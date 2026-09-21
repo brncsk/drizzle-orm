@@ -8,6 +8,8 @@ import type { Dialect } from '../utils/schemaValidator';
 export type Schema = { type: 'schema'; name: string };
 export type Table = { type: 'table'; schema: string | false; name: string };
 export type Role = { type: 'role'; name: string };
+/** A privilege is the schema's to manage when its grantee is: a role the roles filter accepts, or one the schema names. */
+export type Privilege = { type: 'privilege'; grantee: string };
 
 /*
 	there's a double edge sword with having narrow list here
@@ -19,7 +21,7 @@ export type Role = { type: 'role'; name: string };
 	I will leave this as is and in introspect I will rely on introspected schemas and tables
 	to filter list of dependent entities, that'd probably be the go to
 */
-export type KitEntity = Schema | Table | Role;
+export type KitEntity = Schema | Table | Role | Privilege;
 
 export type EntityFilter = (it: KitEntity) => boolean;
 
@@ -33,6 +35,8 @@ export const prepareEntityFilter = (
 	},
 	/* .existing() in drizzle schema */
 	existingEntities: (Schema | Table)[],
+	/* the roles the drizzle schema names: declared with pgRole, or granted to with pgGrant */
+	declaredRoles: string[] = [],
 ): EntityFilter => {
 	const tablesConfig = typeof params.tables === 'undefined'
 		? []
@@ -63,6 +67,7 @@ export const prepareEntityFilter = (
 	const tablesFilter = prepareTablesFilter(tablesConfig, existingViews);
 
 	const rolesFilter = prepareRolesFilter(params.entities);
+	const declared = new Set(declaredRoles);
 
 	const filter = (it: KitEntity) => {
 		if (it.type === 'schema') return schemasFilter(it);
@@ -71,6 +76,11 @@ export const prepareEntityFilter = (
 			return schemasFilter({ type: 'schema', name: it.schema }) && tablesFilter(it);
 		}
 		if (it.type === 'role') return rolesFilter(it);
+		if (it.type === 'privilege') {
+			// PUBLIC is not a role the roles filter could name; a grant to it is managed when the schema declares one
+			if (it.grantee === 'PUBLIC') return declared.has('PUBLIC');
+			return declared.has(it.grantee) || rolesFilter({ type: 'role', name: it.grantee });
+		}
 
 		assertUnreachable(it);
 	};

@@ -965,22 +965,31 @@ const alterRoleConvertor = convertor('alter_role', ({ diff, role }) => {
 	// }`};`;
 });
 
+/** What a privilege is held on: `SCHEMA "acl"` when it has no table, the qualified table otherwise. */
+const privilegeTarget = ({ schema, table }: { schema: string; table: string | null }) => {
+	if (table === null) return `SCHEMA "${schema}"`;
+	return schema !== 'public' ? `"${schema}"."${table}"` : `"${table}"`;
+};
+
+/** The grantee as SQL names it: the keyword `PUBLIC` for every role, a quoted name otherwise. */
+const grantee = (name: string) => name.toUpperCase() === 'PUBLIC' ? 'PUBLIC' : `"${name}"`;
+
 const grantPrivilegeConvertor = convertor('grant_privilege', (st) => {
-	const { schema, table } = st.privilege;
 	const privilege = st.privilege;
 
-	return `GRANT ${privilege.type} ON ${
-		schema !== 'public' ? `"${schema}"."${table}"` : `"${table}"`
-	} TO "${privilege.grantee}"${privilege.isGrantable ? ' WITH GRANT OPTION' : ''} GRANTED BY "${privilege.grantor}";`;
+	// GRANTED BY names the grantor only when it is known and is not the owner:
+	// Postgres accepts the clause only for the current role or one it is a
+	// member of, so a declared privilege, whose grantor is whoever runs the
+	// migration, leaves it out.
+	return `GRANT ${privilege.type} ON ${privilegeTarget(privilege)} TO ${grantee(privilege.grantee)}${
+		privilege.isGrantable ? ' WITH GRANT OPTION' : ''
+	}${privilege.grantor ? ` GRANTED BY "${privilege.grantor}"` : ''};`;
 });
 
 const revokePrivilegeConvertor = convertor('revoke_privilege', (st) => {
-	const { schema, table } = st.privilege;
 	const privilege = st.privilege;
 
-	return `REVOKE ${privilege.type} ON ${
-		schema !== 'public' ? `"${schema}"."${table}"` : `"${table}"`
-	} FROM "${privilege.grantee}";`;
+	return `REVOKE ${privilege.type} ON ${privilegeTarget(privilege)} FROM ${grantee(privilege.grantee)};`;
 });
 
 const regrantPrivilegeConvertor = convertor('regrant_privilege', (st) => {

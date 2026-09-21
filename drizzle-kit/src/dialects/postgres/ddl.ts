@@ -105,12 +105,20 @@ export const createDDL = () => {
 			password: 'string?',
 			validUntil: 'string?',
 		},
+		/*
+			A privilege is held on a table (a view is a table here, as it is in
+			information_schema) or, with `table` null, on a schema. `grantor` is
+			null for a privilege the schema declares and for one the object's
+			owner granted; it names the role only when someone else granted it,
+			so a declared privilege and the one Postgres reports back for it
+			compare equal.
+		*/
 		privileges: {
-			grantor: 'string',
+			grantor: 'string?',
 			grantee: 'string',
 			schema: 'required',
-			table: 'required',
-			type: ['ALL', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'],
+			table: 'optional',
+			type: ['ALL', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'USAGE', 'CREATE'],
 			isGrantable: 'boolean',
 		},
 		policies: {

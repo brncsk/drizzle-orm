@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { render } from 'hanji';
-import { extractPostgresExisting } from '../../dialects/drizzle';
+import { declaredRoles, extractPostgresExisting } from '../../dialects/drizzle';
 import type {
 	CheckConstraint,
 	Column,
@@ -63,7 +63,7 @@ export const handle = async (
 	const res = await schemaSource.load();
 
 	const existing = extractPostgresExisting(res.schemas, res.views, res.matViews);
-	const entityFilter = prepareEntityFilter('postgresql', filters, existing);
+	const entityFilter = prepareEntityFilter('postgresql', filters, existing, declaredRoles(res));
 
 	const { schema: schemaTo, errors, warnings } = fromDrizzleSchema(res, entityFilter);
 

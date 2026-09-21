@@ -8,7 +8,7 @@ import type { HintsHandler, IdFor, RenameCreateHintKind } from './hints';
 import type { RenamePromptItem } from './views';
 import { humanizeKind, humanLog, isRenamePromptItem, ResolveSelect } from './views';
 
-type PromptEntityBase = { name: string; schema?: string; table?: string };
+type PromptEntityBase = { name: string; schema?: string; table?: string | null };
 
 const entityId = <K extends RenameCreateHintKind>(
 	kind: K,
@@ -47,14 +47,16 @@ const entityId = <K extends RenameCreateHintKind>(
 				}
 				return value;
 			};
-			if (typeof entity.table !== 'string') {
-				throw new Error(`Expected ${kind} resolver entity to include a table name`);
-			}
+			// no grantor: declared, or granted by the owner; no table: held on the schema
+			const optional = (property: string): string => {
+				const value = record[property];
+				return typeof value === 'string' ? value : '';
+			};
 			return [
-				required('grantor'),
+				optional('grantor'),
 				required('grantee'),
 				entity.schema ?? defaultSchema,
-				entity.table,
+				optional('table'),
 				required('type'),
 			] as unknown as IdFor<K>;
 		}

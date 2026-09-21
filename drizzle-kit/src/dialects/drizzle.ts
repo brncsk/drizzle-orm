@@ -11,7 +11,9 @@ import { getViewConfig as mysqlViewConfig, type MySqlView } from 'drizzle-orm/my
 import {
 	getMaterializedViewConfig as pgMatViewConfig,
 	getViewConfig as pgViewConfig,
+	type PgGrant,
 	type PgMaterializedView,
+	type PgRole,
 	type PgSchema,
 	type PgView,
 } from 'drizzle-orm/pg-core';
@@ -41,6 +43,25 @@ export const extractPostgresExisting = (
 	}));
 
 	return [...existingSchemas, ...existingViews, ...existingMatViews];
+};
+
+/**
+ * The roles a drizzle schema names: declared with `pgRole`, or granted to
+ * with `pgGrant`. Their privileges in the database are the schema's to
+ * manage, whatever the roles filter says; a privilege held by any other
+ * role is left alone, so `push` never revokes what it did not grant.
+ */
+export const declaredRoles = (schema: { roles: PgRole[]; grants: PgGrant[] }): string[] => {
+	const names = new Set<string>();
+	for (const role of schema.roles) names.add(role.name);
+	for (const grant of schema.grants) names.add(granteeName(grant.to));
+	return [...names];
+};
+
+/** The grantee as the database reports it: `PUBLIC`, the pseudo-role every role is in, in any spelling, or the role's name. */
+export const granteeName = (to: PgGrant['to']): string => {
+	const name = typeof to === 'string' ? to : to.name;
+	return name.toUpperCase() === 'PUBLIC' ? 'PUBLIC' : name;
 };
 
 export const extractCrdbExisting = (

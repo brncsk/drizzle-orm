@@ -2267,6 +2267,23 @@ export const defaultsCommutative = (
 	return false;
 };
 
+/**
+ * The name a privilege is keyed by: who holds what on which object. The
+ * grantor is part of it only when it is known, so that a privilege the
+ * schema declares (no grantor) and the same privilege as Postgres reports
+ * it, granted by the owner (normalized to no grantor), are one entity.
+ */
+export const privilegeName = (it: {
+	grantor: string | null;
+	grantee: string;
+	schema: string;
+	table: string | null;
+	type: string;
+}) => {
+	const target = it.table === null ? it.schema : `${it.schema}.${it.table}`;
+	return `${it.grantee}:${target}:${it.type}${it.grantor === null ? '' : `:by:${it.grantor}`}`;
+};
+
 type ViewColumnShape = { name: string; type: string; typeSchema: string | null; dimensions: number };
 
 /**

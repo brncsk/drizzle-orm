@@ -275,6 +275,7 @@ export const ddlToTypeScript = (
 		if (x.entityType === 'enums' && x.schema === 'public') imports.add('pgEnum');
 		if (x.entityType === 'policies') imports.add('pgPolicy');
 		if (x.entityType === 'roles') imports.add('pgRole');
+		if (x.entityType === 'privileges' && (x.table !== null || x.schema !== 'public')) imports.add('pgGrant');
 	}
 
 	const enumStatements = ddl.enums.list().map((it) => {
@@ -432,6 +433,29 @@ export const ddlToTypeScript = (
 		})
 		.join('\n\n');
 
+	// one pgGrant per object, grantee and grant option, listing the privileges;
+	// a privilege on the public schema has no declaration to refer to, since
+	// the generated file declares no pgSchema for it, and is left out
+	const grantGroups = new Map<string, { on: string; to: string; withGrantOption: boolean; privileges: string[] }>();
+	for (const it of ddl.privileges.list()) {
+		if (it.table === null && it.schema === 'public') continue;
+		const on = it.table === null
+			? schemas[it.schema]!
+			: withCasing(paramNameFor(it.table, schemas[it.schema]), casing);
+		const to = it.grantee in rolesNameToTsKey ? rolesNameToTsKey[it.grantee]! : escapeForTsLiteral(it.grantee);
+		const key = `${on}:${to}:${it.isGrantable}`;
+		const group = grantGroups.get(key) ?? { on, to, withGrantOption: it.isGrantable, privileges: [] };
+		group.privileges.push(it.type.toLowerCase());
+		grantGroups.set(key, group);
+	}
+	const grantStatements = [...grantGroups.values()].map((it) => {
+		const privileges = it.privileges.map((p) => `"${p}"`).join(', ');
+		const option = it.withGrantOption ? ', withGrantOption: true' : '';
+		return `export const ${
+			withCasing(`${it.to.replace(/\W/g, '')}On${it.on.capitalise()}`, casing)
+		} = pgGrant({ on: ${it.on}, to: ${it.to}, privileges: [${privileges}]${option} });`;
+	}).join('\n');
+
 	const uniquePgImports = [...imports];
 
 	const importsTs = `import { ${
@@ -449,6 +473,7 @@ import { sql } from "drizzle-orm"\n\n`;
 	decalrations += tableStatements.join('\n\n');
 	decalrations += '\n';
 	decalrations += viewsStatements;
+	decalrations += grantStatements ? `\n\n${grantStatements}\n` : '';
 
 	const file = importsTs + decalrations;
 

@@ -8,6 +8,7 @@ import {
 	PgDialect,
 	PgEnum,
 	PgEnumObject,
+	PgGrant,
 	PgMaterializedView,
 	PgPolicy,
 	PgRole,
@@ -69,7 +70,7 @@ import { DB } from 'src/utils';
 import 'zx/globals';
 import { relationsToTypeScript } from 'src/cli/commands/pull-common';
 import { EntitiesFilter, EntitiesFilterConfig } from 'src/cli/validations/common';
-import { extractPostgresExisting } from 'src/dialects/drizzle';
+import { declaredRoles, extractPostgresExisting } from 'src/dialects/drizzle';
 import { postgresCommutativity } from 'src/dialects/postgres/commutativity';
 import { PostgresSnapshot } from 'src/dialects/postgres/snapshot';
 import { upToV8 } from 'src/dialects/postgres/versions';
@@ -96,6 +97,7 @@ export type PostgresSchema = Record<
 	| PgMaterializedView
 	| PgRole
 	| PgPolicy
+	| PgGrant
 	| unknown
 >;
 
@@ -136,11 +138,12 @@ export const drizzleToDDL = (
 	const policies = Object.values(schema).filter((it) => is(it, PgPolicy)) as PgPolicy[];
 	const views = Object.values(schema).filter((it) => isPgView(it)) as PgView[];
 	const materializedViews = Object.values(schema).filter((it) => isPgMaterializedView(it)) as PgMaterializedView[];
+	const grants = Object.values(schema).filter((it) => is(it, PgGrant)) as PgGrant[];
 
-	const grouped = { schemas, tables, enums, sequences, roles, policies, views, matViews: materializedViews };
+	const grouped = { schemas, tables, enums, sequences, roles, policies, views, matViews: materializedViews, grants };
 
 	const existing = extractPostgresExisting(schemas, views, materializedViews);
-	const filter = prepareEntityFilter('postgresql', filtersConfig, existing);
+	const filter = prepareEntityFilter('postgresql', filtersConfig, existing, declaredRoles(grouped));
 
 	const {
 		schema: res,
@@ -152,7 +155,7 @@ export const drizzleToDDL = (
 		throw new Error();
 	}
 
-	return { ...interimToDDL(res), existing };
+	return { ...interimToDDL(res), existing, declared: declaredRoles(grouped) };
 };
 
 // 2 schemas -> 2 ddls -> diff
@@ -227,11 +230,11 @@ export const push = async (config: {
 		extensions: [],
 	};
 
-	const { ddl: ddl2, errors: err2, existing } = 'entities' in to && '_' in to
-		? { ddl: to as PostgresDDL, errors: [], existing: [] }
+	const { ddl: ddl2, errors: err2, existing, declared } = 'entities' in to && '_' in to
+		? { ddl: to as PostgresDDL, errors: [], existing: [], declared: [] }
 		: drizzleToDDL(to, filterConfig);
 
-	const filter = prepareEntityFilter('postgresql', filterConfig, existing);
+	const filter = prepareEntityFilter('postgresql', filterConfig, existing, declared);
 	const { schema } = await introspect(
 		db,
 		filter,
