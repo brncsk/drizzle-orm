@@ -36,6 +36,7 @@ import {
 	existsInViewDef,
 	isSerialType,
 	normalizePostgisType,
+	sameIndexOptions,
 	viewColumnsReplaceable,
 } from './grammar';
 import type { JsonAlterPrimaryKey, JsonRecreateIndex, JsonStatement } from './statements';
@@ -711,6 +712,8 @@ export const ddlDiff = async (
 		if (it.entityType !== 'indexes') return false;
 
 		delete it.concurrently;
+		// the options as Postgres stores them: a quoted value and the same value unquoted are one option
+		if (it.with && sameIndexOptions(it.with.from, it.with.to)) delete it.with;
 
 		return ddl2.indexes.hasDiff(it);
 	});

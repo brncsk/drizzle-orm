@@ -2349,6 +2349,35 @@ export const callsFunction = (
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * An index's `WITH` options in one spelling: each `name=value` with the
+ * name lowercased and the value as `reloptions` holds it, without the
+ * quotes a declaration writes around a value with special characters
+ * (`search_tokenizer='unicode_words(ascii_folding=true)'`), sorted by
+ * name. What a declared option list and an introspected one are compared
+ * by; the declared text itself is what `CREATE INDEX` is rendered from.
+ */
+export const normalizeIndexOptions = (options: string | null) => {
+	if (!options) return '';
+	return splitExpressions(options)
+		.map((option) => {
+			const at = option.indexOf('=');
+			if (at < 0) return option.trim().toLowerCase();
+			const name = option.slice(0, at).trim().toLowerCase();
+			let value = option.slice(at + 1).trim();
+			if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+				value = value.slice(1, -1).replaceAll("''", "'");
+			}
+			return `${name}=${value}`;
+		})
+		.sort()
+		.join(', ');
+};
+
+/** Whether two index option lists are the same options. */
+export const sameIndexOptions = (a: string | null, b: string | null) =>
+	normalizeIndexOptions(a) === normalizeIndexOptions(b);
+
+/**
  * A SQL type name as Postgres prints it (`format_type`), so that a
  * declared `int` and an introspected `integer` compare equal: the common
  * aliases are expanded, whitespace is collapsed, keywords are lowercased
