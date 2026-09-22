@@ -746,6 +746,10 @@ export function generateLatestSnapshot(
 			case 'drop_extension':
 				del(ddl.extensions, statement.extension);
 				break;
+			case 'alter_extension':
+				del(ddl.extensions, statement.from);
+				push(ddl.extensions, statement.extension);
+				break;
 
 			default:
 				assertUnreachable(statement);

@@ -1,4 +1,12 @@
-import { splitSqlType, trimDefaultValueSuffix } from 'src/dialects/postgres/grammar';
+import {
+	normalizeFunctionAttributes,
+	normalizeFunctionReturns,
+	normalizeSqlTypeName,
+	normalizeTriggerWhen,
+	parseTriggerDefinition,
+	splitSqlType,
+	trimDefaultValueSuffix,
+} from 'src/dialects/postgres/grammar';
 import { expect, test } from 'vitest';
 
 test.each([
@@ -81,4 +89,75 @@ test('to default array', () => {
 	// expect.soft(toDefaultArray([{ key: 'one' }, { key: 'two' }], 1, (it) => JSON.stringify(it))).toBe(
 	// 	`{{"key":"one"},{"key":"two"}}`,
 	// );
+});
+
+test.each([
+	['int', 'integer'],
+	['INT4', 'integer'],
+	['float8', 'double precision'],
+	['double  precision', 'double precision'],
+	['uuid []', 'uuid[]'],
+	['varchar', 'character varying'],
+	['numeric(10,2)', 'numeric(10,2)'],
+	['paradedb.searchqueryinput', 'paradedb.searchqueryinput'],
+	['"MyType"', '"MyType"'],
+])('normalizeSqlTypeName(%s) -> %s', (input, expected) => {
+	expect(normalizeSqlTypeName(input)).toBe(expected);
+});
+
+test.each([
+	['TABLE (line geometry, kind text)', 'TABLE(line geometry, kind text)'],
+	['table(a numeric(10,2), b int)', 'TABLE(a numeric(10,2), b integer)'],
+	['SETOF int', 'SETOF integer'],
+	['trigger', 'trigger'],
+	['void', 'void'],
+])('normalizeFunctionReturns(%s) -> %s', (input, expected) => {
+	expect(normalizeFunctionReturns(input)).toBe(expected);
+});
+
+test.each([
+	[null, null],
+	['', null],
+	['VOLATILE', null],
+	['immutable strict parallel safe', 'IMMUTABLE STRICT PARALLEL SAFE'],
+	['PARALLEL SAFE IMMUTABLE STRICT', 'IMMUTABLE STRICT PARALLEL SAFE'],
+	[
+		'STABLE SECURITY DEFINER SET search_path = pg_catalog, public',
+		'STABLE SECURITY DEFINER SET search_path = pg_catalog, public',
+	],
+	['SET search_path TO pg_catalog, public STABLE', 'STABLE SET search_path = pg_catalog, public'],
+	['RETURNS NULL ON NULL INPUT SECURITY INVOKER COST 10', 'STRICT COST 10'],
+	[
+		'IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog, public',
+		'IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog, public',
+	],
+])('normalizeFunctionAttributes(%s) -> %s', (input, expected) => {
+	expect(normalizeFunctionAttributes(input)).toBe(expected);
+});
+
+test.each([
+	['AFTER INSERT OR DELETE OR UPDATE', 'AFTER INSERT OR UPDATE OR DELETE'],
+	['before  insert or update', 'BEFORE INSERT OR UPDATE'],
+	['AFTER UPDATE OF a,b OR INSERT', 'AFTER INSERT OR UPDATE OF a, b'],
+	['INSTEAD OF DELETE', 'INSTEAD OF DELETE'],
+])('normalizeTriggerWhen(%s) -> %s', (input, expected) => {
+	expect(normalizeTriggerWhen(input)).toBe(expected);
+});
+
+test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
+	expect(
+		parseTriggerDefinition(
+			'CREATE TRIGGER grants_recompile AFTER INSERT OR DELETE OR UPDATE ON acl.grants FOR EACH ROW EXECUTE FUNCTION acl.grants_recompile()',
+		),
+	).toStrictEqual({ when: 'AFTER INSERT OR UPDATE OR DELETE', level: 'ROW', function: 'acl.grants_recompile' });
+	expect(
+		parseTriggerDefinition(
+			'CREATE TRIGGER "Check" BEFORE INSERT ON public.fields FOR EACH STATEMENT EXECUTE FUNCTION fields_check()',
+		),
+	).toStrictEqual({ when: 'BEFORE INSERT', level: 'STATEMENT', function: 'public.fields_check' });
+	expect(
+		parseTriggerDefinition(
+			'CREATE TRIGGER t AFTER INSERT ON public.users FOR EACH ROW WHEN ((new.id > 0)) EXECUTE FUNCTION audit()',
+		),
+	).toBeNull();
 });

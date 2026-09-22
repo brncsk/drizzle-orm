@@ -160,9 +160,15 @@ export const createDDL = () => {
 			function: 'string',
 			comment: 'string?',
 		},
-		/* `schema` is where the extension's objects are installed, null for the default. */
+		/*
+			An extension is one by name. `namespace` (the `SCHEMA` it is
+			installed in; not `schema`, which names an entity's identity) and
+			`version` are compared only where a declaration states them, since
+			an installed extension always has both and a declaration that says
+			nothing accepts what stands.
+		*/
 		extensions: {
-			schema: 'optional',
+			namespace: 'string?',
 			version: 'string?',
 			cascade: 'boolean',
 		},

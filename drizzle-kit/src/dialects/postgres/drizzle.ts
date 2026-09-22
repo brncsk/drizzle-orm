@@ -76,6 +76,10 @@ import {
 	Line,
 	maxRangeForIdentityBasedOn,
 	minRangeForIdentityBasedOn,
+	normalizeFunctionAttributes,
+	normalizeFunctionReturns,
+	normalizeSqlTypeName,
+	normalizeTriggerWhen,
 	Point,
 	privilegeName,
 	splitSqlType,
@@ -844,15 +848,18 @@ export const fromDrizzleSchema = (
 	for (const fn of schema.functions) {
 		const fnSchema = fn.schema ?? 'public';
 		if (!filter({ type: 'schema', name: fnSchema })) continue;
+		// the types, the attributes and the body are kept as Postgres reports
+		// them, so that what is declared and what is introspected compare equal
+		const body = is(fn.body, SQL) ? dialect.sqlToQuery(fn.body).sql : fn.body;
 		res.functions.push({
 			entityType: 'functions',
 			schema: fnSchema,
 			name: fn.name,
-			args: fn.args.map((it) => ({ name: it.name, type: it.type })),
-			returns: fn.returns,
+			args: fn.args.map((it) => ({ name: it.name, type: normalizeSqlTypeName(it.type) })),
+			returns: normalizeFunctionReturns(fn.returns),
 			language: fn.language,
-			body: is(fn.body, SQL) ? dialect.sqlToQuery(fn.body).sql : fn.body,
-			attributes: fn.attributes ?? null,
+			body: body.trim(),
+			attributes: normalizeFunctionAttributes(fn.attributes ?? null),
 			comment: fn.comment ?? null,
 		});
 	}
@@ -869,7 +876,7 @@ export const fromDrizzleSchema = (
 			schema: target.schema,
 			table: target.table,
 			name: trigger.name,
-			when: trigger.when,
+			when: normalizeTriggerWhen(trigger.when),
 			level: trigger.level,
 			function: functionName,
 			comment: trigger.comment ?? null,
@@ -880,7 +887,8 @@ export const fromDrizzleSchema = (
 		res.extensions.push({
 			entityType: 'extensions',
 			name: ext.name,
-			schema: ext.schema ?? null,
+			// null where the declaration says nothing: whatever stands is accepted
+			namespace: ext.schema ?? null,
 			version: ext.version ?? null,
 			cascade: ext.cascade,
 		});

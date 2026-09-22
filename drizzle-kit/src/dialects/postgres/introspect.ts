@@ -6,7 +6,9 @@ import { filterMigrationsSchema } from '../utils';
 import type {
 	CheckConstraint,
 	Enum,
+	Extension,
 	ForeignKey,
+	Function,
 	Index,
 	InterimColumn,
 	InterimIndex,
@@ -18,15 +20,18 @@ import type {
 	Role,
 	Schema,
 	Sequence,
+	Trigger,
 	UniqueConstraint,
 	View,
 	ViewColumn,
 } from './ddl';
 import {
 	defaultForColumn,
+	functionFromCatalog,
 	isSerialExpression,
 	isSystemNamespace,
 	parseOnType,
+	parseTriggerDefinition,
 	parseViewDefinition,
 	privilegeName,
 	stringFromDatabaseIdentityProperty as parseIdentityProperty,
@@ -74,6 +79,9 @@ export const fromDatabase = async (
 	const privileges: Privilege[] = [];
 	const views: View[] = [];
 	const viewColumns: ViewColumn[] = [];
+	const functions: Function[] = [];
+	const triggers: Trigger[] = [];
+	const extensions: Extension[] = [];
 
 	// type OP = {
 	// 	oid: number | string;
@@ -503,6 +511,117 @@ export const fromDatabase = async (
 			})
 		: [] as PrivilegeListItem[];
 
+	type FunctionListItem = {
+		schema: string;
+		name: string;
+		/* as `pg_get_function_arguments` prints them: `name type, name type` */
+		args: string;
+		/* as `pg_get_function_result` prints it */
+		returns: string;
+		language: string;
+		body: string;
+		volatile: 'i' | 's' | 'v';
+		parallel: 's' | 'r' | 'u';
+		definer: boolean;
+		strict: boolean;
+		leakproof: boolean;
+		config: string[] | null;
+		comment: string | null;
+	};
+	// the functions of the schemas, leaving out what an extension installed
+	// (its functions belong to it, not to the schema) and what is not a plain
+	// function (an aggregate, a procedure, a window function)
+	const functionsQuery = filteredNamespacesStringForSQL
+		? db.query<FunctionListItem>(`
+		SELECT
+			nspname::text AS "schema",
+			proname::text AS "name",
+			pg_catalog.pg_get_function_arguments(pg_proc.oid) AS "args",
+			pg_catalog.pg_get_function_result(pg_proc.oid) AS "returns",
+			lanname::text AS "language",
+			prosrc AS "body",
+			provolatile::text AS "volatile",
+			proparallel::text AS "parallel",
+			prosecdef AS "definer",
+			proisstrict AS "strict",
+			proleakproof AS "leakproof",
+			proconfig::text[] AS "config",
+			pg_catalog.obj_description(pg_proc.oid, 'pg_proc') AS "comment"
+		FROM pg_catalog.pg_proc
+		JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) pronamespace
+		JOIN pg_catalog.pg_language ON pg_language.oid OPERATOR(pg_catalog.=) prolang
+		WHERE prokind OPERATOR(pg_catalog.=) 'f'
+			AND nspname IN (${filteredNamespacesStringForSQL})
+			AND NOT EXISTS (
+				SELECT 1 FROM pg_catalog.pg_depend
+				WHERE classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_proc'::pg_catalog.regclass
+					AND objid OPERATOR(pg_catalog.=) pg_proc.oid
+					AND deptype OPERATOR(pg_catalog.=) 'e')
+		ORDER BY pg_proc.oid;
+	`).then((rows) => {
+				queryCallback('functions', rows, null);
+				return rows;
+			}).catch((error) => {
+				queryCallback('functions', [], error);
+				throw error;
+			})
+		: [] as FunctionListItem[];
+
+	type TriggerListItem = {
+		schema: string;
+		table: string;
+		name: string;
+		/* as `pg_get_triggerdef` prints it */
+		definition: string;
+		comment: string | null;
+	};
+	// the user triggers of the tables (a constraint's internal triggers are not the schema's)
+	const triggersQuery = filteredNamespacesStringForSQL
+		? db.query<TriggerListItem>(`
+		SELECT
+			nspname::text AS "schema",
+			relname::text AS "table",
+			tgname::text AS "name",
+			pg_catalog.pg_get_triggerdef(pg_trigger.oid) AS "definition",
+			pg_catalog.obj_description(pg_trigger.oid, 'pg_trigger') AS "comment"
+		FROM pg_catalog.pg_trigger
+		JOIN pg_catalog.pg_class ON pg_class.oid OPERATOR(pg_catalog.=) tgrelid
+		JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) relnamespace
+		WHERE NOT tgisinternal
+			AND nspname IN (${filteredNamespacesStringForSQL})
+		ORDER BY pg_catalog.lower(nspname), pg_catalog.lower(relname), pg_trigger.oid;
+	`).then((rows) => {
+				queryCallback('triggers', rows, null);
+				return rows;
+			}).catch((error) => {
+				queryCallback('triggers', [], error);
+				throw error;
+			})
+		: [] as TriggerListItem[];
+
+	type ExtensionListItem = {
+		name: string;
+		schema: string;
+		version: string;
+	};
+	// every extension but plpgsql, which every database has
+	const extensionsQuery = db.query<ExtensionListItem>(`
+		SELECT
+			extname::text AS "name",
+			nspname::text AS "schema",
+			extversion::text AS "version"
+		FROM pg_catalog.pg_extension
+		JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) extnamespace
+		WHERE extname OPERATOR(pg_catalog.<>) 'plpgsql'
+		ORDER BY pg_catalog.lower(extname);
+	`).then((rows) => {
+		queryCallback('extensions', rows, null);
+		return rows;
+	}).catch((error) => {
+		queryCallback('extensions', [], error);
+		throw error;
+	});
+
 	progressCallback('fks', 0, 'fetching');
 	progressCallback('checks', 0, 'fetching');
 	const constraintsQuery = db.query<{
@@ -608,6 +727,9 @@ export const fromDatabase = async (
 		privilegesList,
 		constraintsList,
 		columnsList,
+		functionsList,
+		triggersList,
+		extensionsList,
 	] = await Promise
 		.all([
 			dependQuery,
@@ -619,6 +741,9 @@ export const fromDatabase = async (
 			privilegesQuery,
 			constraintsQuery,
 			columnsQuery,
+			functionsQuery,
+			triggersQuery,
+			extensionsQuery,
 		]);
 
 	const groupedEnums = enumsList.reduce((acc, it) => {
@@ -718,6 +843,44 @@ export const fromDatabase = async (
 			table: privilege.table,
 			type: privilege.type,
 			isGrantable: privilege.isGrantable,
+		});
+	}
+
+	for (const it of functionsList) {
+		functions.push({
+			entityType: 'functions',
+			schema: it.schema,
+			name: it.name,
+			language: it.language,
+			comment: it.comment,
+			...functionFromCatalog(it),
+		});
+	}
+
+	for (const it of triggersList) {
+		const parsed = parseTriggerDefinition(it.definition);
+		// a trigger this does not read (a constraint trigger, a WHEN condition, a transition table) stays outside the schema
+		if (!parsed) continue;
+		triggers.push({
+			entityType: 'triggers',
+			schema: it.schema,
+			table: it.table,
+			name: it.name,
+			when: parsed.when,
+			level: parsed.level,
+			function: parsed.function,
+			comment: it.comment,
+		});
+	}
+
+	for (const it of extensionsList) {
+		extensions.push({
+			entityType: 'extensions',
+			name: it.name,
+			namespace: it.schema,
+			version: it.version,
+			// how it was created is not recorded; a declaration says whether the dependencies come along
+			cascade: false,
 		});
 	}
 
@@ -1240,6 +1403,10 @@ export const fromDatabase = async (
 			|| resultViews.some((v) => v.schema === x.schema && v.name === x.table);
 	});
 
+	// a function is the schema's when its schema is; a trigger when its table is; an extension always
+	const resultFunctions = functions.filter((x) => resultSchemas.some((s) => s.name === x.schema));
+	const resultTriggers = triggers.filter((x) => resultTables.some((t) => t.schema === x.schema && t.name === x.table));
+
 	return {
 		schemas: resultSchemas,
 		tables: resultTables,
@@ -1256,9 +1423,9 @@ export const fromDatabase = async (
 		policies: resultPolicies,
 		views: resultViews,
 		viewColumns: resultViewColumns,
-		functions: [],
-		triggers: [],
-		extensions: [],
+		functions: resultFunctions,
+		triggers: resultTriggers,
+		extensions,
 	} satisfies InterimSchema;
 };
 

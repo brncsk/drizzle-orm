@@ -10,16 +10,17 @@ import {
 	pgView,
 	text,
 } from 'drizzle-orm/pg-core';
+import { ddlDiffDry } from 'src/dialects/postgres/diff';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-import { diff, prepareTestDatabase, TestDatabase } from './mocks';
+import { diff, diffIntrospect, drizzleToDDL, prepareTestDatabase, TestDatabase } from './mocks';
 
 /*
 	Functions, triggers and extensions as schema entities: what the diff
 	writes for a declaration, in which order against the tables, the
-	indexes and the views that call a function, and whether Postgres
-	accepts the result (every statement list is applied to PGlite as it
-	is). Introspection is not part of this file: `push` cannot see a
-	function yet, so a schema-to-schema diff is what is checked here.
+	indexes and the views that call a function, whether Postgres accepts
+	the result (every statement list is applied to PGlite as it is), and
+	what a pull reads back: the same objects, in a file that pushes and
+	generates nothing.
 */
 
 // @vitest-environment-options {"max-concurrency":1}
@@ -260,6 +261,92 @@ test('an extension is created first and dropped last', async () => {
 	expect(options).toStrictEqual([
 		'CREATE EXTENSION IF NOT EXISTS "pg_search" CASCADE;',
 		`CREATE EXTENSION IF NOT EXISTS "postgis" SCHEMA "gis" VERSION '3.4.0';`,
+	]);
+});
+
+test('a pull reads the functions, the triggers and the extensions back, and the pulled file changes nothing', async () => {
+	const acl = pgSchema('acl');
+	const audit = pgFunction('audit_users', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NEW; END',
+		comment: 'Leaves the row as it is.',
+	});
+	const schema = {
+		acl,
+		users,
+		total,
+		// spelled the way a declaration is: the pull normalizes the type, the attributes and the events
+		count: acl.function('count_users', {
+			args: { lowest: 'int' },
+			returns: 'TABLE (n bigint, lowest integer)',
+			language: 'sql',
+			attributes: 'STABLE SECURITY DEFINER SET search_path = pg_catalog, public',
+			body: 'SELECT count(*), $1 FROM users',
+		}),
+		audit,
+		trigger: pgTrigger('users_audit', {
+			on: users,
+			when: 'AFTER INSERT OR UPDATE OR DELETE',
+			function: audit,
+			comment: 'Audits every write.',
+		}),
+		citext: pgExtension('citext'),
+	};
+	const { pushSqlStatements, generateSqlStatements, ddlAfterPull } = await diffIntrospect(
+		db,
+		schema,
+		'functions-pull',
+		['public', 'acl'],
+	);
+	expect(pushSqlStatements).toStrictEqual([]);
+	expect(generateSqlStatements).toStrictEqual([]);
+	// the extensions' own functions are not read: only the schema's, in creation order
+	expect(ddlAfterPull.functions.list().map((it) => `${it.schema}.${it.name}`)).toStrictEqual([
+		'public.total',
+		'acl.count_users',
+		'public.audit_users',
+	]);
+	const count = ddlAfterPull.functions.one({ schema: 'acl', name: 'count_users' })!;
+	expect(count.args).toStrictEqual([{ name: 'lowest', type: 'integer' }]);
+	expect(count.returns).toBe('TABLE(n bigint, lowest integer)');
+	expect(count.attributes).toBe('STABLE SECURITY DEFINER SET search_path = pg_catalog, public');
+	expect(ddlAfterPull.functions.one({ schema: 'public', name: 'total' })).toMatchObject({
+		attributes: 'IMMUTABLE STRICT',
+		body: 'SELECT $1 + $2',
+		comment: 'The sum of two integers.',
+	});
+	expect(ddlAfterPull.triggers.list()).toStrictEqual([{
+		entityType: 'triggers',
+		schema: 'public',
+		table: 'users',
+		name: 'users_audit',
+		when: 'AFTER INSERT OR UPDATE OR DELETE',
+		level: 'ROW',
+		function: 'public.audit_users',
+		comment: 'Audits every write.',
+	}]);
+	// the extensions the database holds, the two the test database comes with among them, without a pinned version in the file
+	expect(ddlAfterPull.extensions.list().map((it) => it.name)).toStrictEqual(['citext', 'pg_trgm', 'vector']);
+});
+
+test('a push leaves an extension the schema does not declare; a declared version is what is compared', async () => {
+	const { ddl: withVector } = drizzleToDDL({ vector: pgExtension('vector', { version: '0.8.0' }) });
+	const { ddl: without } = drizzleToDDL({});
+	const { ddl: unpinned } = drizzleToDDL({ vector: pgExtension('vector') });
+	const { ddl: other } = drizzleToDDL({ vector: pgExtension('vector', { version: '0.7.0' }) });
+	expect((await ddlDiffDry(withVector, without, 'push')).sqlStatements).toStrictEqual([]);
+	expect((await ddlDiffDry(withVector, without, 'default')).sqlStatements).toStrictEqual(['DROP EXTENSION "vector";']);
+	expect((await ddlDiffDry(withVector, unpinned, 'push')).sqlStatements).toStrictEqual([]);
+	expect((await ddlDiffDry(withVector, other, 'push')).sqlStatements).toStrictEqual([
+		`ALTER EXTENSION "vector" UPDATE TO '0.7.0';`,
+	]);
+	// the schema is compared the same way: stated, it is set; left out, the installed one stands
+	const { ddl: installed } = drizzleToDDL({ vector: pgExtension('vector', { schema: 'public', version: '0.8.0' }) });
+	const { ddl: moved } = drizzleToDDL({ vector: pgExtension('vector', { schema: 'ext' }) });
+	expect((await ddlDiffDry(installed, unpinned, 'push')).sqlStatements).toStrictEqual([]);
+	expect((await ddlDiffDry(installed, moved, 'push')).sqlStatements).toStrictEqual([
+		'ALTER EXTENSION "vector" SET SCHEMA "ext";',
 	]);
 });
 
