@@ -4,6 +4,7 @@ import type { EntitiesFilter, ExtensionsFilter, SchemasFilter, TablesFilter } fr
 import type { Casing } from '../cli/validations/common';
 import { assertUnreachable } from '../utils';
 import type { Dialect } from '../utils/schemaValidator';
+import { isSystemRole } from './postgres/grammar';
 
 export type Schema = { type: 'schema'; name: string };
 export type Table = { type: 'table'; schema: string | false; name: string };
@@ -195,10 +196,11 @@ const prepareRolesFilter = (entities: EntitiesFilter) => {
 	const useRoles: boolean = typeof roles === 'boolean' ? roles : include.length > 0 || exclude.length > 0;
 
 	if (!useRoles) return () => false;
-	if (!include.length && !exclude.length) return () => true;
 
 	const rolesFilter: (it: { type: 'role'; name: string }) => boolean = (it) => {
-		if (it.name.startsWith('pg_')) return false; // postgres system tables
+		// the cluster's own roles (`pg_*`, the bootstrap superuser) are never the schema's, however the config reads
+		if (isSystemRole(it.name)) return false;
+		if (!include.length && !exclude.length) return true;
 
 		const notExcluded = !exclude.length || !exclude.includes(it.name);
 		const included = !include.length || include.includes(it.name);

@@ -242,3 +242,13 @@ test('alter inherit in role', async (t) => {
 	expect(st).toStrictEqual(st0);
 	expect(pst).toStrictEqual(st0);
 });
+
+test("the cluster roles and the session role are never the schema's: a push that manages every role leaves them", async (t) => {
+	// PGlite's session role is `postgres`; the `pg_*` roles come with the cluster
+	await db.query(`CREATE ROLE "operator"`);
+	const { sqlStatements: pst } = await push({ db, to: { manager: pgRole('manager') }, entities: { roles: true } });
+	expect(pst).toStrictEqual([
+		'DROP ROLE "operator";',
+		'CREATE ROLE "manager";',
+	]);
+});

@@ -1,6 +1,7 @@
 import {
 	normalizeFunctionAttributes,
 	normalizeFunctionReturns,
+	normalizeIndexOptions,
 	normalizeSqlTypeName,
 	normalizeTriggerWhen,
 	parseTriggerDefinition,
@@ -160,4 +161,17 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 			'CREATE TRIGGER t AFTER INSERT ON public.users FOR EACH ROW WHEN ((new.id > 0)) EXECUTE FUNCTION audit()',
 		),
 	).toBeNull();
+});
+
+test.each([
+	[null, ''],
+	['fillfactor=70', 'fillfactor=70'],
+	[
+		"key_field=id, search_tokenizer='unicode_words(ascii_folding=true)', target_segment_count=2",
+		'key_field=id, search_tokenizer=unicode_words(ascii_folding=true), target_segment_count=2',
+	],
+	['target_segment_count=2, key_field=id', 'key_field=id, target_segment_count=2'],
+	["a='it''s'", "a=it's"],
+])('normalizeIndexOptions(%s) -> %s', (input, expected) => {
+	expect(normalizeIndexOptions(input)).toBe(expected);
 });
