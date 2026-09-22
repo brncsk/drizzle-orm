@@ -8,7 +8,7 @@ import { toCamelCase } from 'drizzle-orm/casing';
 import type { Casing } from '../../cli/validations/common';
 import { assertUnreachable, trimChar } from '../../utils';
 import { withCasing } from '../pull-utils';
-import { escapeForTsLiteral, inspect } from '../utils';
+import { escapeForSqlTemplate, escapeForTsLiteral, inspect } from '../utils';
 import type {
 	CheckConstraint,
 	Column,
@@ -276,6 +276,9 @@ export const ddlToTypeScript = (
 		if (x.entityType === 'policies') imports.add('pgPolicy');
 		if (x.entityType === 'roles') imports.add('pgRole');
 		if (x.entityType === 'privileges' && (x.table !== null || x.schema !== 'public')) imports.add('pgGrant');
+		if (x.entityType === 'functions' && x.schema === 'public') imports.add('pgFunction');
+		if (x.entityType === 'triggers') imports.add('pgTrigger');
+		if (x.entityType === 'extensions') imports.add('pgExtension');
 	}
 
 	const enumStatements = ddl.enums.list().map((it) => {
@@ -456,6 +459,58 @@ export const ddlToTypeScript = (
 		} = pgGrant({ on: ${it.on}, to: ${it.to}, privileges: [${privileges}]${option} });`;
 	}).join('\n');
 
+	// an extension: its name, and its schema when it is not the default; the
+	// version is not pinned, since a declaration without one accepts what stands
+	const extensionStatements = ddl.extensions.list().map((it) => {
+		const schema = it.namespace !== null && it.namespace !== 'public'
+			? `, { schema: ${escapeForTsLiteral(it.namespace)} }`
+			: '';
+		return `export const ${withCasing(`${it.name}Extension`, casing)} = pgExtension(${
+			escapeForTsLiteral(it.name)
+		}${schema});`;
+	}).join('\n');
+
+	// a function, in the order the database lists them (a SQL body may call an earlier one)
+	const functionNameToTsKey: Record<string, string> = {};
+	const functionStatements = ddl.functions.list().map((it) => {
+		const identifier = withCasing(paramNameFor(it.name, schemas[it.schema]), casing);
+		functionNameToTsKey[`${it.schema}.${it.name}`] = identifier;
+		const func = it.schema !== 'public' ? `${schemas[it.schema]}.function` : 'pgFunction';
+		const lines = [
+			...(it.args.length > 0
+				? [
+					`\targs: { ${
+						it.args.map((a) => `${escapeForTsLiteral(a.name)}: ${escapeForTsLiteral(a.type)}`).join(', ')
+					} },`,
+				]
+				: []),
+			`\treturns: ${escapeForTsLiteral(it.returns)},`,
+			`\tlanguage: ${escapeForTsLiteral(it.language)},`,
+			...(it.attributes !== null ? [`\tattributes: ${escapeForTsLiteral(it.attributes)},`] : []),
+			`\tbody: \`${escapeForSqlTemplate(it.body)}\`,`,
+			...(it.comment !== null ? [`\tcomment: ${escapeForTsLiteral(it.comment)},`] : []),
+		];
+		return `export const ${identifier} = ${func}(${escapeForTsLiteral(it.name)}, {\n${lines.join('\n')}\n});`;
+	}).join('\n\n');
+
+	// a trigger names its table and its function by their declarations when the file has them
+	const triggerStatements = ddl.triggers.list().map((it) => {
+		const table = ddl.tables.one({ schema: it.schema, name: it.table })
+			? withCasing(paramNameFor(it.table, schemas[it.schema]), casing)
+			: escapeForTsLiteral(it.schema !== 'public' ? `${it.schema}.${it.table}` : it.table);
+		const fn = it.function in functionNameToTsKey ? functionNameToTsKey[it.function]! : escapeForTsLiteral(it.function);
+		const lines = [
+			`\ton: ${table},`,
+			`\twhen: ${escapeForTsLiteral(it.when)},`,
+			...(it.level !== 'ROW' ? [`\tlevel: ${escapeForTsLiteral(it.level)},`] : []),
+			`\tfunction: ${fn},`,
+			...(it.comment !== null ? [`\tcomment: ${escapeForTsLiteral(it.comment)},`] : []),
+		];
+		return `export const ${withCasing(paramNameFor(`${it.name}Trigger`, schemas[it.schema]), casing)} = pgTrigger(${
+			escapeForTsLiteral(it.name)
+		}, {\n${lines.join('\n')}\n});`;
+	}).join('\n\n');
+
 	const uniquePgImports = [...imports];
 
 	const importsTs = `import { ${
@@ -466,14 +521,17 @@ export const ddlToTypeScript = (
 import { sql } from "drizzle-orm"\n\n`;
 
 	let decalrations = schemaStatements;
+	decalrations += extensionStatements ? `${extensionStatements}\n` : '';
 	decalrations += rolesStatements;
 	decalrations += enumStatements;
 	decalrations += sequencesStatements;
 	decalrations += '\n';
 	decalrations += tableStatements.join('\n\n');
 	decalrations += '\n';
+	decalrations += functionStatements ? `\n${functionStatements}\n\n` : '';
 	decalrations += viewsStatements;
 	decalrations += grantStatements ? `\n\n${grantStatements}\n` : '';
+	decalrations += triggerStatements ? `\n\n${triggerStatements}\n` : '';
 
 	const file = importsTs + decalrations;
 

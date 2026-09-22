@@ -149,6 +149,7 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'comment_function',
 		'create_extension',
 		'drop_extension',
+		'alter_extension',
 	]);
 	private schemaConflictTypes: JsonStatement['type'][] = [
 		'create_schema',
@@ -213,6 +214,7 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'comment_function',
 		'create_extension',
 		'drop_extension',
+		'alter_extension',
 	];
 
 	protected override getStatementDefinitions(): StatementDefinitions {
@@ -770,14 +772,28 @@ class PostgresCommutativity extends AbstractCommutativity<
 			create_extension: {
 				conflicts: ['create_extension', 'drop_extension', 'create_schema', 'drop_schema', 'rename_schema'],
 				buildInfo: (statement) => ({
-					primary: makeTarget(statement.extension.schema ?? '', statement.extension.name),
+					primary: makeTarget(statement.extension.namespace ?? '', statement.extension.name),
 					ancestors: [],
 				}),
 			},
 			drop_extension: {
 				conflicts: ['create_extension', 'drop_extension', 'create_schema', 'drop_schema', 'rename_schema'],
 				buildInfo: (statement) => ({
-					primary: makeTarget(statement.extension.schema ?? '', statement.extension.name),
+					primary: makeTarget(statement.extension.namespace ?? '', statement.extension.name),
+					ancestors: [],
+				}),
+			},
+			alter_extension: {
+				conflicts: [
+					'create_extension',
+					'drop_extension',
+					'alter_extension',
+					'create_schema',
+					'drop_schema',
+					'rename_schema',
+				],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.extension.namespace ?? '', statement.extension.name),
 					ancestors: [],
 				}),
 			},

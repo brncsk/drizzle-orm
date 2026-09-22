@@ -1202,15 +1202,28 @@ export const ddlDiff = async (
 			.map((it) => prepareStatement('create_trigger', { trigger: it, from: null })),
 	];
 
-	const extensionAlters = alters.filter((it): it is DiffEntities['extensions'] => it.entityType === 'extensions');
+	/*
+		An extension is altered (`ALTER EXTENSION ... UPDATE TO`, `SET
+		SCHEMA`) when its declared version or schema differs from what
+		stands: a declaration without one accepts whatever the database has
+		(an introspected extension always reports both), and `cascade` says
+		how to create it, not what it is. On a push, an extension the schema
+		does not declare is left alone: it may be an operator's, or one
+		another extension requires, and dropping it is not what a schema that
+		says nothing about it asks for.
+	*/
+	const stated = (field: 'version' | 'namespace', it: DiffEntities['extensions']) =>
+		!!it[field] && it.$right[field] !== null && it.$right[field] !== it.$left[field];
+	const extensionAlters = alters
+		.filter((it): it is DiffEntities['extensions'] => it.entityType === 'extensions')
+		.filter((it) => stated('version', it) || stated('namespace', it));
 	const jsonCreateExtensions = [
 		...createdExtensions.map((it) => prepareStatement('create_extension', { extension: it })),
-		...extensionAlters.map((it) => prepareStatement('create_extension', { extension: it.$right })),
+		...extensionAlters.map((it) => prepareStatement('alter_extension', { extension: it.$right, from: it.$left })),
 	];
-	const jsonDropExtensions = [
-		...deletedExtensions.map((it) => prepareStatement('drop_extension', { extension: it })),
-		...extensionAlters.map((it) => prepareStatement('drop_extension', { extension: it.$left })),
-	];
+	const jsonDropExtensions = (mode === 'push' ? [] : deletedExtensions).map((it) =>
+		prepareStatement('drop_extension', { extension: it })
+	);
 
 	const createSchemas = createdSchemas.map((it) => prepareStatement('create_schema', it));
 	const dropSchemas = deletedSchemas.map((it) => prepareStatement('drop_schema', it));

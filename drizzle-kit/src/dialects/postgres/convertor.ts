@@ -1075,14 +1075,26 @@ const dropTriggerConvertor = convertor('drop_trigger', (st) => {
 });
 
 const createExtensionConvertor = convertor('create_extension', (st) => {
-	const { name, schema, version, cascade } = st.extension;
-	return `CREATE EXTENSION IF NOT EXISTS "${name}"${schema ? ` SCHEMA "${schema}"` : ''}${
+	const { name, namespace, version, cascade } = st.extension;
+	return `CREATE EXTENSION IF NOT EXISTS "${name}"${namespace ? ` SCHEMA "${namespace}"` : ''}${
 		version ? ` VERSION '${escapeSingleQuotes(version)}'` : ''
 	}${cascade ? ' CASCADE' : ''};`;
 });
 
 const dropExtensionConvertor = convertor('drop_extension', (st) => {
 	return `DROP EXTENSION "${st.extension.name}";`;
+});
+
+const alterExtensionConvertor = convertor('alter_extension', (st) => {
+	const { extension, from } = st;
+	const statements: string[] = [];
+	if (extension.version !== null && extension.version !== from.version) {
+		statements.push(`ALTER EXTENSION "${extension.name}" UPDATE TO '${escapeSingleQuotes(extension.version)}';`);
+	}
+	if (extension.namespace !== null && extension.namespace !== from.namespace) {
+		statements.push(`ALTER EXTENSION "${extension.name}" SET SCHEMA "${extension.namespace}";`);
+	}
+	return statements;
 });
 
 const createPolicyConvertor = convertor('create_policy', (st) => {
@@ -1225,6 +1237,7 @@ const convertors = [
 	dropTriggerConvertor,
 	createExtensionConvertor,
 	dropExtensionConvertor,
+	alterExtensionConvertor,
 	createPolicyConvertor,
 	dropPolicyConvertor,
 	renamePolicyConvertor,

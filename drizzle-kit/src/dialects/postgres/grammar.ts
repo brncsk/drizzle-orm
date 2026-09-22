@@ -6,6 +6,7 @@ import {
 	isTime,
 	isTimestamp,
 	parseIntervalFields,
+	splitExpressions,
 	stringifyArray,
 	stringifyTuplesArray,
 	trimChar,
@@ -2346,6 +2347,239 @@ export const callsFunction = (
 };
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * A SQL type name as Postgres prints it (`format_type`), so that a
+ * declared `int` and an introspected `integer` compare equal: the common
+ * aliases are expanded, whitespace is collapsed, keywords are lowercased
+ * while a quoted or qualified name keeps its case, and an array suffix is
+ * kept. What a function's arguments and its return type are compared by.
+ */
+export const normalizeSqlTypeName = (type: string) => {
+	const aliases: Record<string, string> = {
+		int: 'integer',
+		int4: 'integer',
+		int2: 'smallint',
+		int8: 'bigint',
+		float4: 'real',
+		float8: 'double precision',
+		float: 'double precision',
+		bool: 'boolean',
+		varchar: 'character varying',
+		char: 'character',
+		decimal: 'numeric',
+		timestamptz: 'timestamp with time zone',
+		timestamp: 'timestamp without time zone',
+		timetz: 'time with time zone',
+		time: 'time without time zone',
+	};
+	const text = type.trim().replace(/\s+/g, ' ');
+	const array = /^(.*?)((?:\s*\[\s*\])+)$/.exec(text);
+	const base = array ? array[1].trim() : text;
+	const suffix = array ? array[2].replace(/\s+/g, '') : '';
+	if (/^[\w ]+$/.test(base)) {
+		const lower = base.toLowerCase();
+		return `${aliases[lower] ?? lower}${suffix}`;
+	}
+	return `${base}${suffix}`;
+};
+
+/**
+ * A function's return type in one spelling: a scalar type as
+ * `normalizeSqlTypeName` gives it, `SETOF` and `TABLE(...)` with their
+ * keywords uppercased, one space after each comma and none before the
+ * parenthesis, which is how `pg_get_function_result` prints them.
+ */
+export const normalizeFunctionReturns = (returns: string) => {
+	const text = returns.trim().replace(/\s+/g, ' ');
+	const table = /^table\s*\((.*)\)$/i.exec(text);
+	if (table) {
+		const columns = splitExpressions(table[1]).map((column) => {
+			const [name, ...type] = column.split(/\s+/);
+			return `${name} ${normalizeSqlTypeName(type.join(' '))}`;
+		});
+		return `TABLE(${columns.join(', ')})`;
+	}
+	const setof = /^setof\s+(.*)$/i.exec(text);
+	if (setof) return `SETOF ${normalizeSqlTypeName(setof[1])}`;
+	return normalizeSqlTypeName(text);
+};
+
+/**
+ * A function's attributes in one spelling and order, so that a declared
+ * `STABLE SECURITY DEFINER SET search_path = pg_catalog, public` and the
+ * same read off `pg_proc` compare equal: the volatility, `STRICT`,
+ * `LEAKPROOF`, `SECURITY DEFINER`, `PARALLEL SAFE` or `RESTRICTED`,
+ * `COST`, `ROWS`, then each `SET name = value` as written. The defaults
+ * (`VOLATILE`, `CALLED ON NULL INPUT`, `NOT LEAKPROOF`, `SECURITY
+ * INVOKER`, `PARALLEL UNSAFE`) are left out; nothing declared is the
+ * empty string. `WINDOW` and `SUPPORT` are kept where they stand, after
+ * the rest. Null when nothing remains.
+ */
+export const normalizeFunctionAttributes = (attributes: string | null): string | null => {
+	if (!attributes) return null;
+	const text = attributes.replace(/\s+/g, ' ').trim();
+	const parts = {
+		volatility: null as string | null,
+		strict: false,
+		leakproof: false,
+		definer: false,
+		parallel: null as string | null,
+		cost: null as string | null,
+		rows: null as string | null,
+		sets: [] as string[],
+		rest: [] as string[],
+	};
+	const patterns: [RegExp, (m: RegExpExecArray) => void][] = [
+		[/^(VOLATILE|STABLE|IMMUTABLE)\b/i, (m) => {
+			parts.volatility = m[1].toUpperCase();
+		}],
+		[/^(STRICT|RETURNS NULL ON NULL INPUT)\b/i, () => {
+			parts.strict = true;
+		}],
+		[/^CALLED ON NULL INPUT\b/i, () => {
+			parts.strict = false;
+		}],
+		[/^NOT LEAKPROOF\b/i, () => {
+			parts.leakproof = false;
+		}],
+		[/^LEAKPROOF\b/i, () => {
+			parts.leakproof = true;
+		}],
+		[/^(?:EXTERNAL )?SECURITY (DEFINER|INVOKER)\b/i, (m) => {
+			parts.definer = m[1].toUpperCase() === 'DEFINER';
+		}],
+		[/^PARALLEL (SAFE|RESTRICTED|UNSAFE)\b/i, (m) => {
+			parts.parallel = m[1].toUpperCase();
+		}],
+		[/^COST (\S+)/i, (m) => {
+			parts.cost = m[1];
+		}],
+		[/^ROWS (\S+)/i, (m) => {
+			parts.rows = m[1];
+		}],
+		[
+			/^SET ([\w.]+) (?:=|TO) (.+?)(?=\s+(?:VOLATILE|STABLE|IMMUTABLE|STRICT|RETURNS NULL|CALLED ON|LEAKPROOF|NOT LEAKPROOF|SECURITY|EXTERNAL|PARALLEL|COST|ROWS|SET|WINDOW|SUPPORT)\b|$)/i,
+			(m) => {
+				parts.sets.push(`SET ${m[1]} = ${m[2].trim()}`);
+			},
+		],
+		[/^SET ([\w.]+) FROM CURRENT\b/i, (m) => {
+			parts.sets.push(`SET ${m[1]} FROM CURRENT`);
+		}],
+		[/^(WINDOW|SUPPORT \S+)/i, (m) => {
+			parts.rest.push(m[1].toUpperCase().startsWith('WINDOW') ? 'WINDOW' : m[1]);
+		}],
+	];
+	let rest = text;
+	while (rest.length > 0) {
+		const matched = patterns.some(([pattern, take]) => {
+			const m = pattern.exec(rest);
+			if (!m) return false;
+			take(m);
+			rest = rest.slice(m[0].length).trim();
+			return true;
+		});
+		if (!matched) {
+			// not a clause this knows: kept as written, so nothing is lost
+			parts.rest.push(rest);
+			break;
+		}
+	}
+	const out = [
+		...(parts.volatility && parts.volatility !== 'VOLATILE' ? [parts.volatility] : []),
+		...(parts.strict ? ['STRICT'] : []),
+		...(parts.leakproof ? ['LEAKPROOF'] : []),
+		...(parts.definer ? ['SECURITY DEFINER'] : []),
+		...(parts.parallel && parts.parallel !== 'UNSAFE' ? [`PARALLEL ${parts.parallel}`] : []),
+		...(parts.cost ? [`COST ${parts.cost}`] : []),
+		...(parts.rows ? [`ROWS ${parts.rows}`] : []),
+		...parts.sets,
+		...parts.rest,
+	];
+	return out.length > 0 ? out.join(' ') : null;
+};
+
+/**
+ * A function as the catalog reports it, in the entity's terms: the
+ * arguments of `pg_get_function_arguments` split on the top-level commas
+ * into names and normalized types, the return type normalized, the body
+ * trimmed, and the attributes rebuilt from `pg_proc`'s flags and
+ * `proconfig` in the normalized spelling. An argument with a mode or a
+ * default keeps them in its type, where a declaration cannot match them.
+ */
+export const functionFromCatalog = (row: {
+	args: string;
+	returns: string;
+	body: string;
+	volatile: 'i' | 's' | 'v';
+	parallel: 's' | 'r' | 'u';
+	definer: boolean;
+	strict: boolean;
+	leakproof: boolean;
+	config: string[] | null;
+}) => {
+	const attributes = [
+		row.volatile === 'i' ? 'IMMUTABLE' : row.volatile === 's' ? 'STABLE' : '',
+		row.strict ? 'STRICT' : '',
+		row.leakproof ? 'LEAKPROOF' : '',
+		row.definer ? 'SECURITY DEFINER' : '',
+		row.parallel === 's' ? 'PARALLEL SAFE' : row.parallel === 'r' ? 'PARALLEL RESTRICTED' : '',
+		...(row.config ?? []).map((entry) => {
+			const at = entry.indexOf('=');
+			return `SET ${entry.slice(0, at)} = ${entry.slice(at + 1)}`;
+		}),
+	].filter((clause) => clause !== '').join(' ');
+	const args = splitExpressions(row.args).map((arg) => {
+		const [name, ...type] = arg.split(/\s+/);
+		return { name, type: normalizeSqlTypeName(type.join(' ')) };
+	});
+	return {
+		args,
+		returns: normalizeFunctionReturns(row.returns),
+		body: row.body.trim(),
+		attributes: normalizeFunctionAttributes(attributes),
+	};
+};
+
+/**
+ * A trigger's timing and events in one spelling: `BEFORE`, `AFTER` or
+ * `INSTEAD OF`, then the events in the order `INSERT`, `UPDATE` (with its
+ * column list as written), `DELETE`, `TRUNCATE`, uppercased and joined by
+ * ` OR `. Postgres prints the events in its own order, so a declared
+ * `AFTER INSERT OR UPDATE OR DELETE` and the printed `AFTER INSERT OR
+ * DELETE OR UPDATE` compare equal through this.
+ */
+export const normalizeTriggerWhen = (when: string) => {
+	const text = when.replace(/\s+/g, ' ').trim();
+	const m = /^(BEFORE|AFTER|INSTEAD OF)\s+(.+)$/i.exec(text);
+	if (!m) return text;
+	const order = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'];
+	const events = m[2].split(/\s+OR\s+/i).map((event) => {
+		const e = event.trim();
+		const update = /^UPDATE\s+OF\s+(.+)$/i.exec(e);
+		if (update) return { kind: 'UPDATE', text: `UPDATE OF ${update[1].split(',').map((c) => c.trim()).join(', ')}` };
+		return { kind: e.toUpperCase(), text: e.toUpperCase() };
+	});
+	events.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+	return `${m[1].toUpperCase()} ${events.map((e) => e.text).join(' OR ')}`;
+};
+
+/**
+ * What `pg_get_triggerdef` prints, taken apart: the timing with the events,
+ * the level and the called function's qualified name; null for a text
+ * this does not read (a constraint trigger, a `WHEN` condition, a
+ * transition table), which stays outside the schema's reach.
+ */
+export const parseTriggerDefinition = (definition: string) => {
+	const m =
+		/^CREATE TRIGGER \S+ (BEFORE|AFTER|INSTEAD OF) (.+?) ON \S+ FOR EACH (ROW|STATEMENT) EXECUTE (?:FUNCTION|PROCEDURE) (.+)\(\)$/s
+			.exec(definition.trim());
+	if (!m) return null;
+	const qualified = m[4].split('.').map((part) => trimChar(part, '"'));
+	const fn = qualified.length === 2 ? `${qualified[0]}.${qualified[1]}` : `public.${qualified[qualified.length - 1]}`;
+	return { when: normalizeTriggerWhen(`${m[1]} ${m[2]}`), level: m[3] as 'ROW' | 'STATEMENT', function: fn };
+};
 
 export const defaults = {
 	/*
