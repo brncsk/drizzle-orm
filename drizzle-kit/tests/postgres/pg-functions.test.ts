@@ -236,6 +236,45 @@ test('a trigger is created after its table and its function, replaced in place, 
 	expect(tableGone).toStrictEqual(['DROP TABLE "users";']);
 });
 
+test('a trigger condition is written as `WHEN`, replaced in place, and on a push only its presence is compared', async () => {
+	const audit = pgFunction('audit', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NEW; END',
+	});
+	const trigger = (condition?: string) =>
+		pgTrigger('users_audit', { on: users, when: 'AFTER UPDATE', condition, function: audit });
+	const schema1 = { users, audit, trigger: trigger('OLD.name IS DISTINCT FROM NEW.name') };
+
+	const { sqlStatements: created } = await diff({}, schema1, []);
+	expect(created.at(-1)).toBe(
+		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW WHEN (OLD.name IS DISTINCT FROM NEW.name) EXECUTE FUNCTION "public"."audit"();',
+	);
+	await apply(created);
+
+	const schema2 = { ...schema1, trigger: trigger('OLD.id <> NEW.id OR OLD.name <> NEW.name') };
+	const { sqlStatements: replaced } = await diff(schema1, schema2, []);
+	expect(replaced).toStrictEqual([
+		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW WHEN (OLD.id <> NEW.id OR OLD.name <> NEW.name) EXECUTE FUNCTION "public"."audit"();',
+	]);
+	await apply(replaced);
+
+	const { sqlStatements: unconditional } = await diff(schema2, { ...schema1, trigger: trigger() }, []);
+	expect(unconditional).toStrictEqual([
+		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();',
+	]);
+	await apply(unconditional);
+
+	// Postgres prints the condition in its own spelling: a push takes it as the declared one, and sees one added or removed
+	const { ddl: declared } = drizzleToDDL(schema1);
+	const { ddl: printed } = drizzleToDDL({ ...schema1, trigger: trigger('(old.name IS DISTINCT FROM new.name)') });
+	const { ddl: none } = drizzleToDDL({ ...schema1, trigger: trigger() });
+	expect((await ddlDiffDry(printed, declared, 'push')).sqlStatements).toStrictEqual([]);
+	expect((await ddlDiffDry(printed, declared, 'default')).sqlStatements).toHaveLength(1);
+	expect((await ddlDiffDry(none, declared, 'push')).sqlStatements).toStrictEqual([created.at(-1)]);
+	expect((await ddlDiffDry(printed, none, 'push')).sqlStatements).toStrictEqual(unconditional);
+});
+
 test('an extension is created first and dropped last', async () => {
 	const plpgsql = pgExtension('plpgsql');
 	const acl = pgSchema('acl');
@@ -291,6 +330,12 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 			function: audit,
 			comment: 'Audits every write.',
 		}),
+		renamed: pgTrigger('users_renamed', {
+			on: users,
+			when: 'AFTER UPDATE',
+			condition: 'OLD.name IS DISTINCT FROM NEW.name',
+			function: audit,
+		}),
 		citext: pgExtension('citext'),
 	};
 	const { pushSqlStatements, generateSqlStatements, ddlAfterPull } = await diffIntrospect(
@@ -323,8 +368,20 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		name: 'users_audit',
 		when: 'AFTER INSERT OR UPDATE OR DELETE',
 		level: 'ROW',
+		condition: null,
 		function: 'public.audit_users',
 		comment: 'Audits every write.',
+	}, {
+		entityType: 'triggers',
+		schema: 'public',
+		table: 'users',
+		name: 'users_renamed',
+		when: 'AFTER UPDATE',
+		level: 'ROW',
+		// as Postgres prints it
+		condition: '(old.name IS DISTINCT FROM new.name)',
+		function: 'public.audit_users',
+		comment: null,
 	}]);
 	// the extensions the database holds, the two the test database comes with among them, without a pinned version in the file
 	expect(ddlAfterPull.extensions.list().map((it) => it.name)).toStrictEqual(['citext', 'pg_trgm', 'vector']);

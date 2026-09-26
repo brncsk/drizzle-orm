@@ -1173,7 +1173,16 @@ export const ddlDiff = async (
 			})
 		);
 
-	const triggerAlters = alters.filter((it): it is DiffEntities['triggers'] => it.entityType === 'triggers');
+	const triggerAlters = alters.filter((it): it is DiffEntities['triggers'] => {
+		if (it.entityType !== 'triggers') return false;
+		// Postgres prints a `WHEN` condition in its own spelling (`old.x`, extra
+		// parentheses, casts), so on a push a condition both sides have is not a
+		// change, as an index's `WHERE` is not; adding or removing one is
+		if (mode === 'push' && it.condition && it.condition.from !== null && it.condition.to !== null) {
+			delete it.condition;
+		}
+		return ddl2.triggers.hasDiff(it);
+	});
 	const sameTrigger = (a: Trigger, b: Trigger) => a.schema === b.schema && a.table === b.table && a.name === b.name;
 	// a trigger that calls a function that is dropped, whether for good or to be created again, is dropped before it and created again after it when the schema still declares it
 	const goneFunctions = new Set(

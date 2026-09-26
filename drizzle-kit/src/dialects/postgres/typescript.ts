@@ -503,6 +503,7 @@ export const ddlToTypeScript = (
 			`\ton: ${table},`,
 			`\twhen: ${escapeForTsLiteral(it.when)},`,
 			...(it.level !== 'ROW' ? [`\tlevel: ${escapeForTsLiteral(it.level)},`] : []),
+			...(it.condition !== null ? [`\tcondition: ${escapeForTsLiteral(it.condition)},`] : []),
 			`\tfunction: ${fn},`,
 			...(it.comment !== null ? [`\tcomment: ${escapeForTsLiteral(it.comment)},`] : []),
 		];

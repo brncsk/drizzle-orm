@@ -1062,9 +1062,9 @@ const createTriggerConvertor = convertor('create_trigger', (st) => {
 		? trigger.function.split('.', 2)
 		: ['public', trigger.function];
 	const statements = [
-		`CREATE OR REPLACE TRIGGER "${trigger.name}" ${trigger.when} ON ${
-			triggerTable(trigger)
-		} FOR EACH ${trigger.level} EXECUTE FUNCTION "${schema}"."${name}"();`,
+		`CREATE OR REPLACE TRIGGER "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)} FOR EACH ${trigger.level}${
+			trigger.condition ? ` WHEN (${trigger.condition})` : ''
+		} EXECUTE FUNCTION "${schema}"."${name}"();`,
 	];
 	if (trigger.comment !== (from?.comment ?? null)) statements.push(triggerCommentStatement(trigger));
 	return statements;
