@@ -151,12 +151,17 @@ export const createDDL = () => {
 			attributes: 'string?',
 			comment: 'string?',
 		},
-		/* A trigger belongs to its table; `function` is the qualified name of the function it calls. */
+		/*
+			A trigger belongs to its table; `function` is the qualified name of
+			the function it calls; `condition` is the text inside `WHEN (...)`,
+			as the declaration writes it or as `pg_get_triggerdef` prints it.
+		*/
 		triggers: {
 			schema: 'required',
 			table: 'required',
 			when: 'string',
 			level: ['ROW', 'STATEMENT'],
+			condition: 'string?',
 			function: 'string',
 			comment: 'string?',
 		},

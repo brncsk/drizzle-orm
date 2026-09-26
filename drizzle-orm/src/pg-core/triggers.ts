@@ -12,6 +12,13 @@ export interface PgTriggerConfig {
 	when: PgTriggerWhen;
 	/** `ROW` (the default) fires once per row; `STATEMENT` once per statement. */
 	level?: 'ROW' | 'STATEMENT';
+	/**
+	 * The `WHEN` condition: a boolean SQL expression over `OLD` and `NEW`,
+	 * without the parentheses around it. Postgres calls the function only
+	 * for a row that satisfies it. On an `AFTER` trigger, a row that fails
+	 * it queues no event, so the function is not entered at all.
+	 */
+	condition?: string;
 	/** The trigger function: the declared function, or its qualified name. It takes no parameters and returns `trigger`. */
 	function: PgFunction | string;
 	/** The comment the trigger carries in the database (`COMMENT ON TRIGGER`). */
@@ -20,7 +27,7 @@ export interface PgTriggerConfig {
 
 /**
  * A trigger of a table, as the schema declares it: when it fires, at which
- * level, and the function it calls. drizzle-kit creates it after its table
+ * level, on which condition, and the function it calls. drizzle-kit creates it after its table
  * and its function exist, replaces it in place when it changes, and drops
  * it before the function it calls is dropped.
  */
@@ -31,6 +38,7 @@ export class PgTrigger {
 	readonly on: PgTable | string;
 	readonly when: PgTriggerWhen;
 	readonly level: 'ROW' | 'STATEMENT';
+	readonly condition: string | undefined;
 	readonly function: PgFunction | string;
 	readonly comment: string | undefined;
 
@@ -45,6 +53,7 @@ export class PgTrigger {
 		this.on = config.on;
 		this.when = config.when;
 		this.level = config.level ?? 'ROW';
+		this.condition = config.condition;
 		this.function = config.function;
 		this.comment = config.comment;
 	}

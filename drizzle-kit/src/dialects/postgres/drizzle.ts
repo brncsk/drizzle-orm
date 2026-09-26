@@ -878,6 +878,7 @@ export const fromDrizzleSchema = (
 			name: trigger.name,
 			when: normalizeTriggerWhen(trigger.when),
 			level: trigger.level,
+			condition: trigger.condition?.trim() || null,
 			function: functionName,
 			comment: trigger.comment ?? null,
 		});
