@@ -903,6 +903,7 @@ export const fromDrizzleSchema = (
 			name: trigger.name,
 			when: normalizeTriggerWhen(trigger.when),
 			level: trigger.level,
+			condition: trigger.condition?.trim() || null,
 			functionSchema: callee.schema,
 			functionName: callee.name,
 			comment: trigger.comment ?? null,

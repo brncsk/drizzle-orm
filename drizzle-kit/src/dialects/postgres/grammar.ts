@@ -2599,22 +2599,24 @@ export const normalizeTriggerWhen = (when: string) => {
 
 /**
  * What `pg_get_triggerdef` prints, taken apart: the timing with the events,
- * the level and the called function's qualified name; null for a text
- * this does not read (a constraint trigger, a `WHEN` condition, a
- * transition table), which stays outside the schema's reach.
+ * the level, the `WHEN` condition (the text inside its parentheses, as
+ * Postgres prints it; null when there is none) and the schema and the name
+ * of the called function; null for a text this does not read (a constraint
+ * trigger, a transition table), which stays outside the schema's reach.
  */
 export const parseTriggerDefinition = (definition: string) => {
 	const m =
-		/^CREATE TRIGGER \S+ (BEFORE|AFTER|INSTEAD OF) (.+?) ON \S+ FOR EACH (ROW|STATEMENT) EXECUTE (?:FUNCTION|PROCEDURE) (.+)\(\)$/s
+		/^CREATE TRIGGER \S+ (BEFORE|AFTER|INSTEAD OF) (.+?) ON \S+ FOR EACH (ROW|STATEMENT)(?: WHEN \((.+)\))? EXECUTE (?:FUNCTION|PROCEDURE) (.+)\(\)$/s
 			.exec(definition.trim());
 	if (!m) return null;
 	// The function is `schema.name`, or `name` in `public`.
-	const qualified = m[4].split('.').map((part) => trimChar(part, '"'));
+	const qualified = m[5].split('.').map((part) => trimChar(part, '"'));
 	const functionSchema = qualified.length === 2 ? qualified[0]! : 'public';
 	const functionName = qualified[qualified.length - 1]!;
 	return {
 		when: normalizeTriggerWhen(`${m[1]} ${m[2]}`),
 		level: m[3] as 'ROW' | 'STATEMENT',
+		condition: m[4] ?? null,
 		functionSchema,
 		functionName,
 	};

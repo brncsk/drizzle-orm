@@ -205,6 +205,7 @@ export const rows = (prefix = ''): Record<string, Row> => {
 		name: named('trg'),
 		when: 'BEFORE INSERT',
 		level: 'ROW',
+		condition: null,
 		functionSchema: schema,
 		functionName: triggerFunction.name,
 		comment: null,

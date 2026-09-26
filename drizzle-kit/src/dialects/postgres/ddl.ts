@@ -185,7 +185,8 @@ export const createDDL = () => {
 			A trigger belongs to its table. `functionSchema` and `functionName`
 			name the function it calls. They are two fields, so that the edge to
 			the function follows a rename of the function's schema and the stored
-			row stays correct.
+			row stays correct. `condition` is the text inside `WHEN (...)`, as the
+			declaration writes it or as `pg_get_triggerdef` prints it.
 		*/
 		triggers: {
 			schema: 'string',
@@ -193,6 +194,7 @@ export const createDDL = () => {
 			name: 'string',
 			when: 'string',
 			level: ['ROW', 'STATEMENT'],
+			condition: 'string?',
 			functionSchema: 'string',
 			functionName: 'string',
 			comment: 'string?',

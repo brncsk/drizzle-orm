@@ -153,6 +153,7 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 	).toStrictEqual({
 		when: 'AFTER INSERT OR UPDATE OR DELETE',
 		level: 'ROW',
+		condition: null,
 		functionSchema: 'acl',
 		functionName: 'grants_recompile',
 	});
@@ -163,12 +164,26 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 	).toStrictEqual({
 		when: 'BEFORE INSERT',
 		level: 'STATEMENT',
+		condition: null,
 		functionSchema: 'public',
 		functionName: 'fields_check',
 	});
+	// the condition is the text inside `WHEN (...)`, with the parentheses Postgres adds inside it
 	expect(
 		parseTriggerDefinition(
-			'CREATE TRIGGER t AFTER INSERT ON public.users FOR EACH ROW WHEN ((new.id > 0)) EXECUTE FUNCTION audit()',
+			"CREATE TRIGGER objects_fan_out AFTER UPDATE ON public._objects FOR EACH ROW WHEN (((old.scope IS DISTINCT FROM new.scope) OR (current_setting('x'::text, true) = 'on'::text))) EXECUTE FUNCTION tree.objects_fan_out()",
+		),
+	).toStrictEqual({
+		when: 'AFTER UPDATE',
+		level: 'ROW',
+		condition: "((old.scope IS DISTINCT FROM new.scope) OR (current_setting('x'::text, true) = 'on'::text))",
+		functionSchema: 'tree',
+		functionName: 'objects_fan_out',
+	});
+	// a transition table is not read
+	expect(
+		parseTriggerDefinition(
+			'CREATE TRIGGER t AFTER INSERT ON public.users REFERENCING NEW TABLE AS added FOR EACH STATEMENT EXECUTE FUNCTION audit()',
 		),
 	).toBeNull();
 });
