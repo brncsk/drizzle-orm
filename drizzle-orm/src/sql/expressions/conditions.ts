@@ -1,5 +1,6 @@
 import { type AnyColumn, Column, type GetColumnData } from '~/column.ts';
 import { entityKind, is, isAnyKindIn } from '~/entity.ts';
+import { makePgArray } from '~/pg-core/array.ts';
 import { Table } from '~/table.ts';
 import { View } from '~/view.ts';
 import {
@@ -277,6 +278,52 @@ const lessThanOrEqualOp = new StringChunk(' <= ');
 export const lte: BinaryOperator = (left: SQLWrapper, right: unknown): SQL =>
 	checkColumnWithValue(left, lessThanOrEqualOp, right);
 
+/**
+ * Whether a column is a Postgres column of a scalar type: one that
+ * `inArray` and `notInArray` compare with one array parameter. The test
+ * reads the entity kinds of the class chain, since this module cannot
+ * import `pg-core`'s column classes without a cycle. An array column keeps the `in` list.
+ */
+function isScalarPgColumn(column: SQLWrapper): column is Column & { dimensions?: number } {
+	if (!is(column, Column) || (column as { dimensions?: number }).dimensions) return false;
+	for (let c = column.constructor; c; c = Object.getPrototypeOf(c)) {
+		if ((c as { [entityKind]?: string })[entityKind] === 'PgColumn') return true;
+	}
+	return false;
+}
+
+/**
+ * The list of `inArray` and `notInArray` on a Postgres column as one
+ * array parameter: a list given now, a placeholder filled at execute
+ * time, or an array parameter (`sql.param([...])`). Each element goes
+ * through the column's encoder, also the elements a placeholder is filled
+ * with, and the list is bound as an array literal (`{"a","b"}`), which
+ * every driver passes as text and Postgres reads as an array of the
+ * column's type; a JavaScript array is bound as an array by some drivers
+ * only. Anything else (a subquery, an `SQL` chunk, a column) is not a
+ * list, and is undefined.
+ */
+function arrayParam(column: Column, values: unknown): Param | undefined {
+	const encoder = {
+		mapToDriverValue: (list: unknown) =>
+			Array.isArray(list)
+				? makePgArray(
+					column.mapToDriverValue.isNoop
+						? list
+						: list.map((v) => (v === null || v === undefined ? null : column.mapToDriverValue(v))),
+				)
+				: list,
+	};
+	if (Array.isArray(values)) return new Param(encoder.mapToDriverValue(values));
+	if (is(values, Placeholder)) return new Param(values, encoder);
+	if (is(values, Param) && Array.isArray(values.value)) return new Param(encoder.mapToDriverValue(values.value));
+	return undefined;
+}
+
+const anyOp = new StringChunk(' = any(');
+const allOp = new StringChunk(' <> all(');
+const closeParen = new StringChunk(')');
+
 const inOp = new StringChunk(' in ');
 /**
  * Test whether the first parameter, a column or expression,
@@ -289,6 +336,13 @@ const inOp = new StringChunk(' in ');
  * db.select().from(cars)
  *   .where(inArray(cars.make, ['Ford', 'GM']))
  * ```
+ *
+ * On a Postgres column of a scalar type, a list (an array, a placeholder,
+ * or an array parameter) is one array parameter, `"make" = any($1)`: the
+ * text is the same for a list of any length, so one plan serves every
+ * call, and an empty list matches no row. Each element goes through the
+ * column's encoder. A subquery or an `SQL` chunk renders `in (...)`, and
+ * so does a list on another dialect.
  *
  * @see notInArray for the inverse of this test
  */
@@ -308,6 +362,10 @@ export function inArray(
 	column: SQLWrapper,
 	values: ReadonlyArray<unknown | Placeholder> | SQLWrapper,
 ): SQL {
+	if (isScalarPgColumn(column)) {
+		const list = arrayParam(column, values);
+		if (list) return new SQL([column, anyOp, list, closeParen]);
+	}
 	if (Array.isArray(values)) {
 		if (values.length === 0) {
 			return new SQL([
@@ -339,6 +397,9 @@ const notInOp = new StringChunk(' not in ');
  *   .where(notInArray(cars.make, ['Ford', 'GM']))
  * ```
  *
+ * On a Postgres column of a scalar type, a list is one array parameter,
+ * `"make" <> all($1)`, as for `inArray`; an empty list matches every row.
+ *
  * @see inArray for the inverse of this test
  */
 export function notInArray<T>(
@@ -357,6 +418,10 @@ export function notInArray(
 	column: SQLWrapper,
 	values: (unknown | Placeholder)[] | SQLWrapper,
 ): SQL {
+	if (isScalarPgColumn(column)) {
+		const list = arrayParam(column, values);
+		if (list) return new SQL([column, allOp, list, closeParen]);
+	}
 	if (Array.isArray(values)) {
 		if (values.length === 0) {
 			return new SQL([
