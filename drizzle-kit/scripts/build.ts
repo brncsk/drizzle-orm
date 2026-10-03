@@ -28,6 +28,11 @@ const driversPackages = [
 	// duckdb drivers
 	'duckdb',
 	'@duckdb/node-api',
+	// aws drivers: the CLI imports a DSQL connector only when it connects
+	// through one, and a bundled connector would make the CLI require both
+	// `pg` and `postgres` as it loads
+	'@aws/aurora-dsql-node-postgres-connector',
+	'@aws/aurora-dsql-postgresjs-connector',
 ];
 
 const external = [
