@@ -15,6 +15,7 @@ import type { Index } from './indexes.ts';
 import { IndexBuilder } from './indexes.ts';
 import { PgPolicy } from './policies.ts';
 import { type PrimaryKey, PrimaryKeyBuilder } from './primary-keys.ts';
+import { PgReplicaIdentity } from './publications.ts';
 import { type UniqueConstraint, UniqueConstraintBuilder } from './unique-constraint.ts';
 import type { PgViewBase } from './view-base.ts';
 import { PgMaterializedViewConfig, PgViewConfig } from './view-common.ts';
@@ -31,6 +32,7 @@ export function getTableConfig<TTable extends PgTable>(table: TTable) {
 	const schema = table[Table.Symbol.Schema];
 	const policies: PgPolicy[] = [];
 	const enableRLS: boolean = table[PgTable.Symbol.EnableRLS];
+	let replicaIdentity: PgReplicaIdentity | undefined;
 
 	const extraConfigBuilder = table[PgTable.Symbol.ExtraConfigBuilder];
 
@@ -50,6 +52,11 @@ export function getTableConfig<TTable extends PgTable>(table: TTable) {
 				foreignKeys.push(builder.build(table));
 			} else if (is(builder, PgPolicy)) {
 				policies.push(builder);
+			} else if (is(builder, PgReplicaIdentity)) {
+				if (replicaIdentity) {
+					throw new Error(`Table "${name}" declares its replica identity twice`);
+				}
+				replicaIdentity = builder;
 			} else {
 				throwUnknownExtraConfigValue(name, builder);
 			}
@@ -67,6 +74,8 @@ export function getTableConfig<TTable extends PgTable>(table: TTable) {
 		schema,
 		policies,
 		enableRLS,
+		/** The declared replica identity, or `undefined` for the default (the primary key). */
+		replicaIdentity,
 	};
 }
 
