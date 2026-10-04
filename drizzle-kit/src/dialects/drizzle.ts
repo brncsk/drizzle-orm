@@ -13,6 +13,7 @@ import {
 	getViewConfig as pgViewConfig,
 	type PgGrant,
 	type PgMaterializedView,
+	type PgPublication,
 	type PgRole,
 	type PgSchema,
 	type PgView,
@@ -57,6 +58,10 @@ export const declaredRoles = (schema: { roles: PgRole[]; grants: PgGrant[] }): s
 	for (const grant of schema.grants) names.add(granteeName(grant.to));
 	return [...names];
 };
+
+/** The names of the publications the schema declares: the only ones a push manages. */
+export const declaredPublications = (schema: { publications: PgPublication[] }): string[] =>
+	schema.publications.map((it) => it.name);
 
 /** The grantee as the database reports it: `PUBLIC`, the pseudo-role every role is in, in any spelling, or the role's name. */
 export const granteeName = (to: PgGrant['to']): string => {

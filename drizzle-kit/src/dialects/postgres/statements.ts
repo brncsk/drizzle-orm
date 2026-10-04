@@ -11,6 +11,10 @@ import type {
 	Policy,
 	PrimaryKey,
 	Privilege,
+	Publication,
+	PublicationSchema,
+	PublicationTable,
+	ReplicaIdentity,
 	Role,
 	Schema,
 	Sequence,
@@ -456,6 +460,56 @@ export interface JsonAlterExtension {
 	from: Extension;
 }
 
+/** `CREATE PUBLICATION`, with the tables and the schemas it sends from the start. */
+export interface JsonCreatePublication {
+	type: 'create_publication';
+	publication: Publication;
+	tables: PublicationTable[];
+	schemas: PublicationSchema[];
+}
+
+export interface JsonDropPublication {
+	type: 'drop_publication';
+	publication: Publication;
+}
+
+/** `ALTER PUBLICATION ... SET (...)`: the changes it sends, or how it sends a partition's. */
+export interface JsonAlterPublication {
+	type: 'alter_publication';
+	publication: Publication;
+	from: Publication;
+}
+
+/** `ALTER PUBLICATION ... ADD TABLE`. A changed column list is a drop and an add of the table. */
+export interface JsonAddPublicationTable {
+	type: 'add_publication_table';
+	table: PublicationTable;
+}
+
+export interface JsonDropPublicationTable {
+	type: 'drop_publication_table';
+	table: PublicationTable;
+}
+
+export interface JsonAddPublicationSchema {
+	type: 'add_publication_schema';
+	schema: PublicationSchema;
+}
+
+export interface JsonDropPublicationSchema {
+	type: 'drop_publication_schema';
+	schema: PublicationSchema;
+}
+
+/** `ALTER TABLE ... REPLICA IDENTITY`. */
+export interface JsonAlterReplicaIdentity {
+	type: 'alter_replica_identity';
+	schema: string;
+	table: string;
+	identity: 'default' | ReplicaIdentity['identity'];
+	index: string | null;
+}
+
 export type JsonStatement =
 	| JsonCreateTable
 	| JsonDropTable
@@ -523,6 +577,14 @@ export type JsonStatement =
 	| JsonCreateExtension
 	| JsonDropExtension
 	| JsonAlterExtension
+	| JsonCreatePublication
+	| JsonDropPublication
+	| JsonAlterPublication
+	| JsonAddPublicationTable
+	| JsonDropPublicationTable
+	| JsonAddPublicationSchema
+	| JsonDropPublicationSchema
+	| JsonAlterReplicaIdentity
 	| JsonDropValueFromEnum
 	| JsonAlterCheck
 	| JsonRecreateIndex;

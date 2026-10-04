@@ -21,6 +21,8 @@ import type {
 	PostgresEntities,
 	PrimaryKey,
 	Privilege,
+	PublicationTable,
+	ReplicaIdentity,
 	Role,
 	Schema,
 	Sequence,
@@ -282,6 +284,17 @@ export const ddlDiff = async (
 				schema: rename.from.schema,
 			},
 		});
+		// a table keeps its replica identity when it is renamed or moved
+		ddl1.replicaIdentities.update({
+			set: {
+				name: rename.to.name,
+				schema: rename.to.schema,
+			},
+			where: {
+				name: rename.from.name,
+				schema: rename.from.schema,
+			},
+		});
 
 		ddl1.fks.update({
 			set: {
@@ -456,6 +469,21 @@ export const ddlDiff = async (
 		} as const;
 		ddl1.checks.update(update6);
 		ddl2.checks.update(update6);
+
+		// a renamed column stays in the column lists of the publications that send it
+		const update7 = {
+			set: {
+				columns: (it: string) => {
+					return it === rename.from.name ? rename.to.name : it;
+				},
+			},
+			where: {
+				schema: rename.from.schema,
+				table: rename.from.table,
+			},
+		} as const;
+		ddl1.publicationTables.update(update7);
+		ddl2.publicationTables.update(update7);
 	}
 
 	preserveEntityNames(ddl1.uniques, ddl2.uniques, mode);
@@ -491,6 +519,11 @@ export const ddlDiff = async (
 				name: rename.from.name,
 				schema: rename.from.schema,
 			},
+		});
+		// a renamed constraint renames its index, which stays the replica identity
+		ddl1.replicaIdentities.update({
+			set: { index: rename.to.name },
+			where: { schema: rename.to.schema, name: rename.to.table, index: rename.from.name },
 		});
 	}
 
@@ -551,6 +584,11 @@ export const ddlDiff = async (
 				name: rename.from.name,
 				schema: rename.from.schema,
 			},
+		});
+		// a renamed index stays the replica identity
+		ddl1.replicaIdentities.update({
+			set: { index: rename.to.name },
+			where: { schema: rename.to.schema, name: rename.to.table, index: rename.from.name },
 		});
 	}
 
@@ -678,6 +716,8 @@ export const ddlDiff = async (
 			},
 		});
 	}
+
+	const publicationsDiff = diff(ddl1, ddl2, 'publications');
 
 	const alters = diff.alters(ddl1, ddl2);
 
@@ -1441,6 +1481,108 @@ export const ddlDiff = async (
 		});
 	});
 
+	/*
+		A publication is never renamed: a new name is a drop and a create. One
+		that changes between sending every table and sending a list is dropped
+		and created again, since `ALTER PUBLICATION` cannot change that; its
+		other options change in place. A new publication is created with its
+		tables and schemas; on an existing one, a table or a schema is added and
+		dropped on its own, and a table whose column list changed is dropped and
+		added again, since Postgres cannot change one table's list alone. A
+		table or a schema that is dropped leaves its publications with it, and
+		so does every table of a publication that is dropped.
+	*/
+	const publicationAlters = alters.filter((it): it is DiffEntities['publications'] => it.entityType === 'publications');
+	const publicationsToRecreate = publicationAlters.filter((it) => it.allTables).map((it) => it.$right.name);
+	const newPublications = new Set([
+		...publicationsDiff.filter((it) => it.$diffType === 'create').map((it) => it.name),
+		...publicationsToRecreate,
+	]);
+	const gonePublications = new Set([
+		...publicationsDiff.filter((it) => it.$diffType === 'drop').map((it) => it.name),
+		...publicationsToRecreate,
+	]);
+	const jsonCreatePublications = ddl2.publications
+		.list()
+		.filter((it) => newPublications.has(it.name))
+		.map((it) =>
+			prepareStatement('create_publication', {
+				publication: it,
+				tables: ddl2.publicationTables.list({ name: it.name }),
+				schemas: ddl2.publicationSchemas.list({ name: it.name }),
+			})
+		);
+	const jsonDropPublications = ddl1.publications
+		.list()
+		.filter((it) => gonePublications.has(it.name))
+		.map((it) => prepareStatement('drop_publication', { publication: it }));
+	const jsonAlterPublications = publicationAlters
+		.filter((it) => !gonePublications.has(it.name) && (it.publish || it.viaRoot))
+		.map((it) => prepareStatement('alter_publication', { publication: it.$right, from: it.$left }));
+
+	const publicationTablesDiff = diff(ddl1, ddl2, 'publicationTables');
+	const publicationTablesAlters = alters.filter((it): it is DiffEntities['publicationTables'] =>
+		it.entityType === 'publicationTables'
+	);
+	const tableStays = (it: PublicationTable) => !gonePublications.has(it.name) && tablesFilter('deleted')(it);
+	const jsonDropPublicationTables = [
+		...publicationTablesDiff.filter((it) => it.$diffType === 'drop'),
+		...publicationTablesAlters.map((it) => it.$left),
+	].filter(tableStays).map((it) => prepareStatement('drop_publication_table', { table: it }));
+	const jsonAddPublicationTables = [
+		...publicationTablesDiff.filter((it) => it.$diffType === 'create'),
+		...publicationTablesAlters.map((it) => it.$right),
+	].filter((it) => !newPublications.has(it.name)).map((it) => prepareStatement('add_publication_table', { table: it }));
+
+	const publicationSchemasDiff = diff(ddl1, ddl2, 'publicationSchemas');
+	const jsonDropPublicationSchemas = publicationSchemasDiff
+		.filter((it) => it.$diffType === 'drop')
+		.filter((it) => !gonePublications.has(it.name) && !deletedSchemas.some((d) => d.name === it.schema))
+		.map((it) => prepareStatement('drop_publication_schema', { schema: it }));
+	const jsonAddPublicationSchemas = publicationSchemasDiff
+		.filter((it) => it.$diffType === 'create')
+		.filter((it) => !newPublications.has(it.name))
+		.map((it) => prepareStatement('add_publication_schema', { schema: it }));
+
+	/*
+		The replica identity is set where it differs from what stands (a table
+		without an entity has the default) and on a new table that declares
+		one; a table that is dropped takes its identity with it. Postgres lets
+		an index that is the replica identity be dropped, and the table then
+		has none, so the identity is set again where its index is created in
+		this migration on a table that already stands: an index that is
+		recreated, or that goes with a column that is recreated.
+	*/
+	const createdIndexNames = new Set(
+		[
+			...jsonCreateIndexes.map((it) => it.type === 'create_index' ? it.index : null),
+			...jsonRecreateIndex.map((it) => it.index),
+			...jsonAddedUniqueConstraints.map((it) => it.type === 'add_unique' ? it.unique : null),
+			...jsonAlteredUniqueConstraints.map((it) => it.diff.$right),
+		].filter((it) => it !== null).map((it) => `${it.schema}.${it.table}.${it.name}`),
+	);
+	const sameIdentity = (a: ReplicaIdentity | null, b: ReplicaIdentity | null) =>
+		(a?.identity ?? 'default') === (b?.identity ?? 'default') && (a?.index ?? null) === (b?.index ?? null);
+	const jsonAlterReplicaIdentities = ddl2.tables
+		.list()
+		.map((table) => {
+			const to = ddl2.replicaIdentities.one({ schema: table.schema, name: table.name });
+			const isNew = createdTables.some((c) => c.schema === table.schema && c.name === table.name);
+			const from = isNew ? null : ddl1.replicaIdentities.one({ schema: table.schema, name: table.name });
+			const indexRecreated = !isNew && to?.identity === 'index'
+				&& createdIndexNames.has(`${table.schema}.${table.name}.${to.index}`);
+			return { table, to, changed: !sameIdentity(from, to) || indexRecreated };
+		})
+		.filter((it) => it.changed)
+		.map(({ table, to }) =>
+			prepareStatement('alter_replica_identity', {
+				schema: table.schema,
+				table: table.name,
+				identity: to?.identity ?? 'default',
+				index: to?.index ?? null,
+			})
+		);
+
 	jsonStatements.push(...createSchemas);
 	jsonStatements.push(...renameSchemas);
 	// an extension is created once the schema it is installed in exists, and before anything that may need its types
@@ -1480,6 +1622,10 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonAlterRlsStatements);
 	jsonStatements.push(...jsonSetTableSchemas);
 	jsonStatements.push(...jsonRenameColumnsStatements);
+	// Postgres refuses to drop a column that a publication's column list names, so a publication lets go of it first
+	jsonStatements.push(...jsonDropPublications);
+	jsonStatements.push(...jsonDropPublicationTables);
+	jsonStatements.push(...jsonDropPublicationSchemas);
 
 	jsonStatements.push(...jsonDropUniqueConstraints);
 	jsonStatements.push(...jsonDropCheckConstraints);
@@ -1515,6 +1661,8 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonAddedUniqueConstraints);
 	jsonStatements.push(...jsonAlteredUniqueConstraints);
 	jsonStatements.push(...jsonCreateIndexes); // above fks for uniqueness constraint to come first
+	// a replica identity is set once the index it names exists
+	jsonStatements.push(...jsonAlterReplicaIdentities);
 
 	jsonStatements.push(...jsonCreateFKs);
 	jsonStatements.push(...jsonRecreateFKs);
@@ -1522,6 +1670,12 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonCreatedCheckConstraints);
 
 	jsonStatements.push(...jsonAlterCheckConstraints);
+
+	// a publication takes a table once the table and the columns it sends exist
+	jsonStatements.push(...jsonCreatePublications);
+	jsonStatements.push(...jsonAlterPublications);
+	jsonStatements.push(...jsonAddPublicationSchemas);
+	jsonStatements.push(...jsonAddPublicationTables);
 
 	// a view is replaced after the tables and columns it selects from changed
 	jsonStatements.push(...jsonReplaceViews);

@@ -35,6 +35,7 @@ import {
 	PgPointObject,
 	PgPointTuple,
 	PgPolicy,
+	PgPublication,
 	PgRole,
 	PgSchema,
 	PgTable,
@@ -272,6 +273,7 @@ export const fromDrizzleSchema = (
 		functions: PgFunction[];
 		triggers: PgTrigger[];
 		extensions: PgExtension[];
+		publications: PgPublication[];
 	},
 	filter: EntityFilter,
 ): {
@@ -302,6 +304,10 @@ export const fromDrizzleSchema = (
 		functions: [],
 		triggers: [],
 		extensions: [],
+		replicaIdentities: [],
+		publications: [],
+		publicationTables: [],
+		publicationSchemas: [],
 	};
 
 	res.schemas = schema.schemas
@@ -361,6 +367,19 @@ export const fromDrizzleSchema = (
 			isRlsEnabled,
 		} satisfies PostgresEntities['tables'];
 	});
+
+	// the default identity is no entity: a table that declares none, or declares the default, has none
+	for (const { config } of tableConfigPairs) {
+		const identity = config.replicaIdentity;
+		if (!identity || identity.kind === 'default') continue;
+		res.replicaIdentities.push({
+			entityType: 'replicaIdentities',
+			schema: config.schema ?? 'public',
+			name: config.name,
+			identity: identity.kind,
+			index: identity.index,
+		});
+	}
 
 	for (const { table, config } of tableConfigPairs) {
 		const {
@@ -895,6 +914,39 @@ export const fromDrizzleSchema = (
 		});
 	}
 
+	/*
+		A publication is the database's, not a schema's, so the filter does
+		not hide it; a table or a schema in it that the filter hides is left
+		out, as the table itself is. A table's columns are listed in the
+		table's order, which is the order Postgres stores them in.
+	*/
+	for (const publication of schema.publications) {
+		res.publications.push({
+			entityType: 'publications',
+			name: publication.name,
+			allTables: publication.allTables,
+			publish: [...publication.publish],
+			viaRoot: publication.publishViaPartitionRoot,
+		});
+		for (const member of publication.tables) {
+			const config = getTableConfig(member.table);
+			const tableSchema = config.schema ?? 'public';
+			if (!filter({ type: 'table', schema: tableSchema, name: config.name })) continue;
+			const listed = new Set((member.columns ?? []).map((it) => it.name));
+			res.publicationTables.push({
+				entityType: 'publicationTables',
+				name: publication.name,
+				schema: tableSchema,
+				table: config.name,
+				columns: config.columns.filter((it) => listed.has(it.name)).map((it) => it.name),
+			});
+		}
+		for (const name of publication.schemas) {
+			if (!filter({ type: 'schema', name })) continue;
+			res.publicationSchemas.push({ entityType: 'publicationSchemas', name: publication.name, schema: name });
+		}
+	}
+
 	return {
 		schema: res,
 		errors,
@@ -921,6 +973,7 @@ export const fromExports = (exports: Record<string, unknown>) => {
 	const functions: PgFunction[] = [];
 	const triggers: PgTrigger[] = [];
 	const extensions: PgExtension[] = [];
+	const publications: PgPublication[] = [];
 	const relations: Relations[] = [];
 
 	const i0values = Object.values(exports);
@@ -973,6 +1026,10 @@ export const fromExports = (exports: Record<string, unknown>) => {
 			extensions.push(t);
 		}
 
+		if (is(t, PgPublication)) {
+			publications.push(t);
+		}
+
 		if (is(t, Relations)) {
 			relations.push(t);
 		}
@@ -991,6 +1048,7 @@ export const fromExports = (exports: Record<string, unknown>) => {
 		functions,
 		triggers,
 		extensions,
+		publications,
 		relations,
 	};
 };
@@ -1008,6 +1066,7 @@ export const prepareFromSchemaFiles = async (imports: string[], transforms: Sche
 	const functions: PgFunction[] = [];
 	const triggers: PgTrigger[] = [];
 	const extensions: PgExtension[] = [];
+	const publications: PgPublication[] = [];
 	const relations: Relations[] = [];
 
 	for (let i = 0; i < imports.length; i++) {
@@ -1038,6 +1097,7 @@ export const prepareFromSchemaFiles = async (imports: string[], transforms: Sche
 		functions.push(...prepared.functions);
 		triggers.push(...prepared.triggers);
 		extensions.push(...prepared.extensions);
+		publications.push(...prepared.publications);
 		relations.push(...prepared.relations);
 	}
 
@@ -1054,6 +1114,7 @@ export const prepareFromSchemaFiles = async (imports: string[], transforms: Sche
 		functions,
 		triggers,
 		extensions,
+		publications,
 		relations,
 	};
 };

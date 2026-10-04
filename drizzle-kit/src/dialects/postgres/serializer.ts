@@ -197,6 +197,9 @@ export function generateLatestSnapshot(
 				ddl.checks.delete(where);
 				ddl.policies.delete(where);
 				ddl.privileges.delete(where);
+				// a dropped table leaves its publications
+				ddl.publicationTables.delete(where);
+				ddl.replicaIdentities.delete({ schema: table.schema, name: table.name });
 				break;
 			}
 			case 'rename_table':
@@ -229,6 +232,10 @@ export function generateLatestSnapshot(
 				ddl.entities.update({
 					where: { schema: statement.schema, table: statement.from },
 					set: { table: statement.to },
+				});
+				ddl.replicaIdentities.update({
+					where: { schema: statement.schema, name: statement.from },
+					set: { name: statement.to },
 				});
 
 				break;
@@ -263,6 +270,10 @@ export function generateLatestSnapshot(
 				ddl.entities.update({
 					where: { schema: statement.from, table: statement.name },
 					set: { table: statement.to },
+				});
+				ddl.replicaIdentities.update({
+					where: { schema: statement.from, name: statement.name },
+					set: { schema: statement.to },
 				});
 
 				break;
@@ -314,6 +325,12 @@ export function generateLatestSnapshot(
 						columns: (column) => column === statement.from.name ? statement.to.name : column,
 					},
 				});
+				ddl.publicationTables.update({
+					where: { schema: statement.from.schema, table: statement.from.table },
+					set: {
+						columns: (column) => column === statement.from.name ? statement.to.name : column,
+					},
+				});
 				break;
 			case 'alter_column':
 				replace(ddl.columns, statement.diff.$left, statement.to);
@@ -332,6 +349,11 @@ export function generateLatestSnapshot(
 				ddl.indexes.update({
 					where: { schema: statement.schema, name: statement.from },
 					set: { name: statement.to },
+				});
+				// a renamed index stays the replica identity
+				ddl.replicaIdentities.update({
+					where: { schema: statement.schema, index: statement.from },
+					set: { index: statement.to },
 				});
 				break;
 			case 'recreate_index':
@@ -391,6 +413,11 @@ export function generateLatestSnapshot(
 				break;
 
 			case 'rename_constraint':
+				// the index of a renamed unique constraint stays the replica identity
+				ddl.replicaIdentities.update({
+					where: { schema: statement.schema, name: statement.table, index: statement.from },
+					set: { index: statement.to },
+				});
 				ddl.pks.update({
 					where: {
 						schema: statement.schema,
@@ -442,6 +469,9 @@ export function generateLatestSnapshot(
 				ddl.policies.delete({ schema: statement.name });
 				ddl.privileges.delete({ schema: statement.name });
 				ddl.views.delete({ schema: statement.name });
+				ddl.publicationTables.delete({ schema: statement.name });
+				ddl.publicationSchemas.delete({ schema: statement.name });
+				ddl.replicaIdentities.delete({ schema: statement.name });
 				break;
 			case 'rename_schema':
 				ddl.schemas.update({
@@ -493,6 +523,18 @@ export function generateLatestSnapshot(
 					set: { schema: statement.to.name },
 				});
 				ddl.privileges.update({
+					where: { schema: statement.from.name },
+					set: { schema: statement.to.name },
+				});
+				ddl.publicationTables.update({
+					where: { schema: statement.from.name },
+					set: { schema: statement.to.name },
+				});
+				ddl.publicationSchemas.update({
+					where: { schema: statement.from.name },
+					set: { schema: statement.to.name },
+				});
+				ddl.replicaIdentities.update({
 					where: { schema: statement.from.name },
 					set: { schema: statement.to.name },
 				});
@@ -749,6 +791,43 @@ export function generateLatestSnapshot(
 			case 'alter_extension':
 				del(ddl.extensions, statement.from);
 				push(ddl.extensions, statement.extension);
+				break;
+
+			case 'create_publication':
+				push(ddl.publications, statement.publication);
+				for (const it of statement.tables) push(ddl.publicationTables, it);
+				for (const it of statement.schemas) push(ddl.publicationSchemas, it);
+				break;
+			case 'drop_publication':
+				del(ddl.publications, statement.publication);
+				ddl.publicationTables.delete({ name: statement.publication.name });
+				ddl.publicationSchemas.delete({ name: statement.publication.name });
+				break;
+			case 'alter_publication':
+				replace(ddl.publications, statement.from, statement.publication);
+				break;
+			case 'add_publication_table':
+				push(ddl.publicationTables, statement.table);
+				break;
+			case 'drop_publication_table':
+				del(ddl.publicationTables, statement.table);
+				break;
+			case 'add_publication_schema':
+				push(ddl.publicationSchemas, statement.schema);
+				break;
+			case 'drop_publication_schema':
+				del(ddl.publicationSchemas, statement.schema);
+				break;
+			case 'alter_replica_identity':
+				ddl.replicaIdentities.delete({ schema: statement.schema, name: statement.table });
+				if (statement.identity !== 'default') {
+					ddl.replicaIdentities.push({
+						schema: statement.schema,
+						name: statement.table,
+						identity: statement.identity,
+						index: statement.index,
+					});
+				}
 				break;
 
 			default:

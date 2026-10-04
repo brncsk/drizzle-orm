@@ -17,6 +17,10 @@ import type {
 	PostgresEntities,
 	PrimaryKey,
 	Privilege,
+	Publication,
+	PublicationSchema,
+	PublicationTable,
+	ReplicaIdentity,
 	Role,
 	Schema,
 	Sequence,
@@ -82,6 +86,10 @@ export const fromDatabase = async (
 	const functions: Function[] = [];
 	const triggers: Trigger[] = [];
 	const extensions: Extension[] = [];
+	const replicaIdentities: ReplicaIdentity[] = [];
+	const publications: Publication[] = [];
+	const publicationTables: PublicationTable[] = [];
+	const publicationSchemas: PublicationSchema[] = [];
 
 	// type OP = {
 	// 	oid: number | string;
@@ -195,6 +203,10 @@ export const fromDatabase = async (
 		definition: string | null;
 		owner: string;
 		comment: string | null;
+		/* d - default, f - full, n - nothing, i - index */
+		replicaIdentity: 'd' | 'f' | 'n' | 'i';
+		/* the index a replica identity of `i` uses, null when it was dropped */
+		replicaIdentityIndex: string | null;
 	};
 	progressCallback('tables', 0, 'fetching');
 	const tablesList = filteredNamespacesStringForSQL
@@ -215,7 +227,14 @@ export const fromDatabase = async (
 					ELSE null
 				END as "definition",
 				pg_catalog.pg_get_userbyid(relowner) AS "owner",
-				pg_catalog.obj_description(pg_class.oid, 'pg_class') AS "comment"
+				pg_catalog.obj_description(pg_class.oid, 'pg_class') AS "comment",
+				relreplident::text AS "replicaIdentity",
+				(
+					SELECT index_class.relname::text
+					FROM pg_catalog.pg_index
+					JOIN pg_catalog.pg_class index_class ON index_class.oid OPERATOR(pg_catalog.=) indexrelid
+					WHERE indrelid OPERATOR(pg_catalog.=) pg_class.oid AND indisreplident
+				) AS "replicaIdentityIndex"
 			FROM
 				pg_catalog.pg_class
 			JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) relnamespace
@@ -255,6 +274,16 @@ export const fromDatabase = async (
 			schema: trimChar(table.schema, "'"),
 			name: table.name,
 			isRlsEnabled: table.rlsEnabled,
+		});
+		// an index identity whose index was dropped behaves as no identity, so it is read as `nothing`
+		if (table.replicaIdentity === 'd') continue;
+		const byIndex = table.replicaIdentity === 'i' && table.replicaIdentityIndex !== null;
+		replicaIdentities.push({
+			entityType: 'replicaIdentities',
+			schema: trimChar(table.schema, "'"),
+			name: table.name,
+			identity: byIndex ? 'index' : table.replicaIdentity === 'f' ? 'full' : 'nothing',
+			index: byIndex ? table.replicaIdentityIndex : null,
 		});
 	}
 	progressCallback('tables', tables.length, 'done');
@@ -621,6 +650,81 @@ export const fromDatabase = async (
 		return rows;
 	}).catch((error) => {
 		queryCallback('extensions', [], error);
+		throw error;
+	});
+
+	/*
+		The publications of the database, with the tables and the schemas each
+		sends. A column list (`prattrs`) and a schema in a publication came with
+		Postgres 15; an older server has neither, and its publications send
+		every column of their tables. A row filter is not read.
+	*/
+	type PublicationListItem = {
+		name: string;
+		allTables: boolean;
+		insert: boolean;
+		update: boolean;
+		delete: boolean;
+		truncate: boolean;
+		viaRoot: boolean;
+	};
+	type PublicationTableListItem = { publication: string; schema: string; table: string; columns: string[] };
+	type PublicationSchemaListItem = { publication: string; schema: string };
+	const publicationsQuery = (async () => {
+		const [{ version }] = await db.query<{ version: number | string }>(
+			`SELECT pg_catalog.current_setting('server_version_num')::int AS "version";`,
+		);
+		const withColumnLists = Number(version) >= 150000;
+		const [publicationsList, tablesList, schemasList] = await Promise.all([
+			db.query<PublicationListItem>(`
+				SELECT
+					pubname::text AS "name",
+					puballtables AS "allTables",
+					pubinsert AS "insert",
+					pubupdate AS "update",
+					pubdelete AS "delete",
+					pubtruncate AS "truncate",
+					pubviaroot AS "viaRoot"
+				FROM pg_catalog.pg_publication
+				ORDER BY pg_catalog.lower(pubname);
+			`),
+			db.query<PublicationTableListItem>(`
+				SELECT
+					pubname::text AS "publication",
+					nspname::text AS "schema",
+					relname::text AS "table",
+					${
+				withColumnLists
+					? `COALESCE((
+						SELECT pg_catalog.array_agg(attname::text ORDER BY attnum)
+						FROM pg_catalog.pg_attribute
+						WHERE attrelid OPERATOR(pg_catalog.=) prrelid
+							AND attnum OPERATOR(pg_catalog.=) ANY (prattrs::int2[])
+					), '{}')`
+					: `'{}'::text[]`
+			} AS "columns"
+				FROM pg_catalog.pg_publication_rel
+				JOIN pg_catalog.pg_publication ON pg_publication.oid OPERATOR(pg_catalog.=) prpubid
+				JOIN pg_catalog.pg_class ON pg_class.oid OPERATOR(pg_catalog.=) prrelid
+				JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) relnamespace
+				ORDER BY pg_catalog.lower(pubname), pg_catalog.lower(nspname), pg_catalog.lower(relname);
+			`),
+			withColumnLists
+				? db.query<PublicationSchemaListItem>(`
+					SELECT pubname::text AS "publication", nspname::text AS "schema"
+					FROM pg_catalog.pg_publication_namespace
+					JOIN pg_catalog.pg_publication ON pg_publication.oid OPERATOR(pg_catalog.=) pnpubid
+					JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) pnnspid
+					ORDER BY pg_catalog.lower(pubname), pg_catalog.lower(nspname);
+				`)
+				: [] as PublicationSchemaListItem[],
+		]);
+		return { publicationsList, tablesList, schemasList };
+	})().then((rows) => {
+		queryCallback('publications', rows.publicationsList, null);
+		return rows;
+	}).catch((error) => {
+		queryCallback('publications', [], error);
 		throw error;
 	});
 
@@ -1382,6 +1486,29 @@ export const fromDatabase = async (
 	}
 	progressCallback('views', views.length, 'done');
 
+	const publicationsRows = await publicationsQuery;
+	for (const it of publicationsRows.publicationsList) {
+		publications.push({
+			entityType: 'publications',
+			name: it.name,
+			allTables: it.allTables,
+			publish: (['insert', 'update', 'delete', 'truncate'] as const).filter((action) => it[action]),
+			viaRoot: it.viaRoot,
+		});
+	}
+	for (const it of publicationsRows.tablesList) {
+		publicationTables.push({
+			entityType: 'publicationTables',
+			name: it.publication,
+			schema: it.schema,
+			table: it.table,
+			columns: it.columns,
+		});
+	}
+	for (const it of publicationsRows.schemasList) {
+		publicationSchemas.push({ entityType: 'publicationSchemas', name: it.publication, schema: it.schema });
+	}
+
 	const resultSchemas = schemas.filter((x) => filter({ type: 'schema', name: x.name }));
 	const resultTables = tables.filter((x) => filter({ type: 'table', schema: x.schema, name: x.name }));
 	const resultEnums = enums.filter((x) => resultSchemas.some((s) => s.name === x.schema));
@@ -1409,6 +1536,18 @@ export const fromDatabase = async (
 	// a function is the schema's when its schema is; a trigger when its table is; an extension always
 	const resultFunctions = functions.filter((x) => resultSchemas.some((s) => s.name === x.schema));
 	const resultTriggers = triggers.filter((x) => resultTables.some((t) => t.schema === x.schema && t.name === x.table));
+	const resultReplicaIdentities = replicaIdentities.filter((x) =>
+		resultTables.some((t) => t.schema === x.schema && t.name === x.name)
+	);
+	// a publication is the schema's when the filter takes it (on a push, when the schema declares it); a table or a schema in it when the filter takes that too
+	const resultPublications = publications.filter((x) => filter({ type: 'publication', name: x.name }));
+	const resultPublicationTables = publicationTables.filter((x) =>
+		resultPublications.some((p) => p.name === x.name)
+		&& resultTables.some((t) => t.schema === x.schema && t.name === x.table)
+	);
+	const resultPublicationSchemas = publicationSchemas.filter((x) =>
+		resultPublications.some((p) => p.name === x.name) && resultSchemas.some((s) => s.name === x.schema)
+	);
 
 	return {
 		schemas: resultSchemas,
@@ -1429,6 +1568,10 @@ export const fromDatabase = async (
 		functions: resultFunctions,
 		triggers: resultTriggers,
 		extensions,
+		replicaIdentities: resultReplicaIdentities,
+		publications: resultPublications,
+		publicationTables: resultPublicationTables,
+		publicationSchemas: resultPublicationSchemas,
 	} satisfies InterimSchema;
 };
 

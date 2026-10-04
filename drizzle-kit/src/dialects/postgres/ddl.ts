@@ -178,6 +178,48 @@ export const createDDL = () => {
 			cascade: 'boolean',
 		},
 		/*
+			The replica identity of a table that does not use the default (its
+			primary key): what an update or a delete on it carries of the old
+			row. `name` is the table's name. With `index`, `index` names the
+			unique index whose columns it carries, and is null otherwise. A table
+			with the default has no entity, so a snapshot written before replica
+			identities were known reads as every table using the default.
+		*/
+		replicaIdentities: {
+			schema: 'required',
+			identity: ['full', 'nothing', 'index'],
+			index: 'string?',
+		},
+		/*
+			A publication is one by name in the database, like a role. `publish`
+			lists the changes it sends, in the order Postgres prints them
+			(`insert`, `update`, `delete`, `truncate`). The tables and the schemas
+			it sends are entities of their own (`publicationTables`,
+			`publicationSchemas`), so that adding or dropping one is a diff of its
+			own. With `allTables` it sends every table and has neither.
+		*/
+		publications: {
+			allTables: 'boolean',
+			publish: 'string[]',
+			viaRoot: 'boolean',
+		},
+		/*
+			A table in a publication. `name` is the publication's name, and
+			`schema` and `table` name the table, so a table renamed or moved
+			stays in its publications. `columns` are the columns it is sent with,
+			in the table's order, which is the order Postgres stores them in;
+			empty for every column.
+		*/
+		publicationTables: {
+			schema: 'required',
+			table: 'required',
+			columns: 'string[]',
+		},
+		/* A schema in a publication (`TABLES IN SCHEMA`). `name` is the publication's name. */
+		publicationSchemas: {
+			schema: 'required',
+		},
+		/*
 			`columns` is what the definition produces, as the declaration knows
 			it: the diff replaces a view in place (`CREATE OR REPLACE VIEW`) when
 			the new list keeps the old one as a prefix, which is the condition
@@ -256,6 +298,10 @@ export type Function = PostgresEntities['functions'];
 export type FunctionArg = Function['args'][number];
 export type Trigger = PostgresEntities['triggers'];
 export type Extension = PostgresEntities['extensions'];
+export type ReplicaIdentity = PostgresEntities['replicaIdentities'];
+export type Publication = PostgresEntities['publications'];
+export type PublicationTable = PostgresEntities['publicationTables'];
+export type PublicationSchema = PostgresEntities['publicationSchemas'];
 
 /** A column of a view as `pull` renders it; the view entity carries the subset the diff compares. */
 export type ViewColumn = {
@@ -315,6 +361,10 @@ export interface InterimSchema {
 	functions: Function[];
 	triggers: Trigger[];
 	extensions: Extension[];
+	replicaIdentities: ReplicaIdentity[];
+	publications: Publication[];
+	publicationTables: PublicationTable[];
+	publicationSchemas: PublicationSchema[];
 }
 
 export function postgresToRelationsPull(schema: PostgresDDL): SchemaForPull {
@@ -462,6 +512,31 @@ interface ExtensionDuplicate {
 	name: string;
 }
 
+interface PublicationDuplicate {
+	type: 'publication_duplicate';
+	name: string;
+}
+
+interface PublicationTableDuplicate {
+	type: 'publication_table_duplicate';
+	publication: string;
+	schema: string;
+	table: string;
+}
+
+interface PublicationSchemaDuplicate {
+	type: 'publication_schema_duplicate';
+	publication: string;
+	schema: string;
+}
+
+interface ReplicaIdentityIndexMissing {
+	type: 'replica_identity_index_missing';
+	schema: string;
+	table: string;
+	index: string;
+}
+
 interface EnumValuesDuplicate {
 	type: 'enum_values_duplicate';
 	schema: string;
@@ -485,7 +560,11 @@ export type SchemaError =
 	| PrivilegeDuplicate
 	| FunctionDuplicate
 	| TriggerDuplicate
-	| ExtensionDuplicate;
+	| ExtensionDuplicate
+	| PublicationDuplicate
+	| PublicationTableDuplicate
+	| PublicationSchemaDuplicate
+	| ReplicaIdentityIndexMissing;
 
 interface PolicyNotLinked {
 	type: 'policy_not_linked';
@@ -721,6 +800,36 @@ export const interimToDDL = (
 		if (res.status === 'CONFLICT') {
 			errors.push({ type: 'trigger_duplicate', schema: it.schema, table: it.table, name: it.name });
 		}
+	}
+
+	for (const it of schema.publications) {
+		const res = ddl.publications.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'publication_duplicate', name: it.name });
+		}
+	}
+
+	for (const it of schema.publicationTables) {
+		const res = ddl.publicationTables.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'publication_table_duplicate', publication: it.name, schema: it.schema, table: it.table });
+		}
+	}
+
+	for (const it of schema.publicationSchemas) {
+		const res = ddl.publicationSchemas.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'publication_schema_duplicate', publication: it.name, schema: it.schema });
+		}
+	}
+
+	for (const it of schema.replicaIdentities) {
+		ddl.replicaIdentities.push(it);
+		// a replica identity index is a unique index of its table: one declared as an index, or the index of a unique constraint
+		if (it.identity !== 'index') continue;
+		const filter = { schema: it.schema, table: it.name, name: it.index ?? '' };
+		if (it.index && (ddl.indexes.one({ ...filter, isUnique: true }) || ddl.uniques.one(filter))) continue;
+		errors.push({ type: 'replica_identity_index_missing', schema: it.schema, table: it.name, index: it.index ?? '' });
 	}
 
 	for (const it of ddl.entities.list()) {

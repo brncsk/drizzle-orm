@@ -1097,6 +1097,67 @@ const alterExtensionConvertor = convertor('alter_extension', (st) => {
 	return statements;
 });
 
+/** A table as `ALTER PUBLICATION` and `CREATE PUBLICATION` name it: with its column list, when it has one. */
+const publicationTableSql = (it: { schema: string; table: string; columns: string[] }) => {
+	const name = it.schema !== 'public' ? `"${it.schema}"."${it.table}"` : `"${it.table}"`;
+	return it.columns.length > 0 ? `${name} (${it.columns.map((c) => `"${c}"`).join(', ')})` : name;
+};
+
+const allPublishActions = ['insert', 'update', 'delete', 'truncate'];
+const publishOption = (publish: string[]) => `publish = '${publish.join(', ')}'`;
+
+const createPublicationConvertor = convertor('create_publication', (st) => {
+	const { publication, tables, schemas } = st;
+	const targets = [
+		...(tables.length > 0 ? [`TABLE ${tables.map(publicationTableSql).join(', ')}`] : []),
+		...(schemas.length > 0 ? [`TABLES IN SCHEMA ${schemas.map((it) => `"${it.schema}"`).join(', ')}`] : []),
+	];
+	const forPart = publication.allTables ? ' FOR ALL TABLES' : targets.length > 0 ? ` FOR ${targets.join(', ')}` : '';
+	// an option is written only when it is not the default: every change, and a partition's change as the partition's
+	const options = [
+		...(allPublishActions.every((it) => publication.publish.includes(it)) ? [] : [publishOption(publication.publish)]),
+		...(publication.viaRoot ? ['publish_via_partition_root = true'] : []),
+	];
+	const withPart = options.length > 0 ? ` WITH (${options.join(', ')})` : '';
+	return `CREATE PUBLICATION "${publication.name}"${forPart}${withPart};`;
+});
+
+const dropPublicationConvertor = convertor('drop_publication', (st) => {
+	return `DROP PUBLICATION "${st.publication.name}";`;
+});
+
+const alterPublicationConvertor = convertor('alter_publication', (st) => {
+	const { publication, from } = st;
+	const options = [
+		...(publication.publish.join() !== from.publish.join() ? [publishOption(publication.publish)] : []),
+		...(publication.viaRoot !== from.viaRoot ? [`publish_via_partition_root = ${publication.viaRoot}`] : []),
+	];
+	return `ALTER PUBLICATION "${publication.name}" SET (${options.join(', ')});`;
+});
+
+const addPublicationTableConvertor = convertor('add_publication_table', (st) => {
+	return `ALTER PUBLICATION "${st.table.name}" ADD TABLE ${publicationTableSql(st.table)};`;
+});
+
+const dropPublicationTableConvertor = convertor('drop_publication_table', (st) => {
+	return `ALTER PUBLICATION "${st.table.name}" DROP TABLE ${publicationTableSql({ ...st.table, columns: [] })};`;
+});
+
+const addPublicationSchemaConvertor = convertor('add_publication_schema', (st) => {
+	return `ALTER PUBLICATION "${st.schema.name}" ADD TABLES IN SCHEMA "${st.schema.schema}";`;
+});
+
+const dropPublicationSchemaConvertor = convertor('drop_publication_schema', (st) => {
+	return `ALTER PUBLICATION "${st.schema.name}" DROP TABLES IN SCHEMA "${st.schema.schema}";`;
+});
+
+const alterReplicaIdentityConvertor = convertor('alter_replica_identity', (st) => {
+	const { schema, table, identity, index } = st;
+	const tableNameWithSchema = schema !== 'public' ? `"${schema}"."${table}"` : `"${table}"`;
+	const value = identity === 'index' ? `USING INDEX "${index}"` : identity.toUpperCase();
+	return `ALTER TABLE ${tableNameWithSchema} REPLICA IDENTITY ${value};`;
+});
+
 const createPolicyConvertor = convertor('create_policy', (st) => {
 	const { schema, table } = st.policy;
 	const policy = st.policy;
@@ -1176,6 +1237,14 @@ const toggleRlsConvertor = convertor('alter_rls', (st) => {
 });
 
 const convertors = [
+	createPublicationConvertor,
+	dropPublicationConvertor,
+	alterPublicationConvertor,
+	addPublicationTableConvertor,
+	dropPublicationTableConvertor,
+	addPublicationSchemaConvertor,
+	dropPublicationSchemaConvertor,
+	alterReplicaIdentityConvertor,
 	createSchemaConvertor,
 	dropSchemaConvertor,
 	renameSchemaConvertor,

@@ -1350,6 +1350,11 @@ export const fromDatabase = async (
 		functions: functions.filter((x) => schemas.some((s) => s.name === x.schema)),
 		triggers: triggers.filter((x) => tables.some((t) => t.schema === x.schema && t.name === x.table)),
 		extensions,
+		// replica identities and publications are not read from Aurora DSQL
+		replicaIdentities: [],
+		publications: [],
+		publicationTables: [],
+		publicationSchemas: [],
 	} satisfies InterimSchema;
 };
 

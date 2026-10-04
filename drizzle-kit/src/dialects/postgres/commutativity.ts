@@ -106,6 +106,20 @@ const triggerConflicts: JsonStatement['type'][] = [
 	'move_table',
 ];
 
+/** Every statement on a publication or on what it sends: a publication keeps its order against all of them. */
+const publicationConflicts: JsonStatement['type'][] = [
+	'create_publication',
+	'drop_publication',
+	'alter_publication',
+	'add_publication_table',
+	'drop_publication_table',
+	'add_publication_schema',
+	'drop_publication_schema',
+];
+
+/** A publication is one by name in the database, like a role. */
+const publicationTarget = (name: string) => makeTarget('', name);
+
 class PostgresCommutativity extends AbstractCommutativity<
 	JsonStatement,
 	PostgresSnapshot,
@@ -215,6 +229,11 @@ class PostgresCommutativity extends AbstractCommutativity<
 		'create_extension',
 		'drop_extension',
 		'alter_extension',
+		'add_publication_table',
+		'drop_publication_table',
+		'add_publication_schema',
+		'drop_publication_schema',
+		'alter_replica_identity',
 	];
 
 	protected override getStatementDefinitions(): StatementDefinitions {
@@ -794,6 +813,71 @@ class PostgresCommutativity extends AbstractCommutativity<
 				],
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.extension.namespace ?? '', statement.extension.name),
+					ancestors: [],
+				}),
+			},
+
+			// Publication operations: a table or a schema in a publication is a target of its own, under the publication and the table or the schema
+			create_publication: {
+				conflicts: publicationConflicts,
+				buildInfo: (statement) => ({ primary: publicationTarget(statement.publication.name), ancestors: [] }),
+			},
+			drop_publication: {
+				conflicts: publicationConflicts,
+				buildInfo: (statement) => ({ primary: publicationTarget(statement.publication.name), ancestors: [] }),
+			},
+			alter_publication: {
+				conflicts: publicationConflicts,
+				buildInfo: (statement) => ({ primary: publicationTarget(statement.publication.name), ancestors: [] }),
+			},
+			add_publication_table: {
+				conflicts: ['add_publication_table', 'drop_publication_table'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.table.schema, statement.table.table, `publication:${statement.table.name}`),
+					ancestors: [
+						publicationTarget(statement.table.name),
+						makeTableTarget(statement.table.schema, statement.table.table),
+					],
+				}),
+			},
+			drop_publication_table: {
+				conflicts: ['add_publication_table', 'drop_publication_table'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.table.schema, statement.table.table, `publication:${statement.table.name}`),
+					ancestors: [
+						publicationTarget(statement.table.name),
+						makeTableTarget(statement.table.schema, statement.table.table),
+					],
+				}),
+			},
+			add_publication_schema: {
+				conflicts: ['add_publication_schema', 'drop_publication_schema'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.schema.schema, '', `publication:${statement.schema.name}`),
+					ancestors: [publicationTarget(statement.schema.name)],
+				}),
+			},
+			drop_publication_schema: {
+				conflicts: ['add_publication_schema', 'drop_publication_schema'],
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.schema.schema, '', `publication:${statement.schema.name}`),
+					ancestors: [publicationTarget(statement.schema.name)],
+				}),
+			},
+
+			// A replica identity keeps its order against another one of the table, the table, and the index it may name
+			alter_replica_identity: {
+				conflicts: [
+					'alter_replica_identity',
+					'drop_table',
+					'rename_table',
+					'move_table',
+					'drop_index',
+					'rename_index',
+					'recreate_index',
+				],
+				buildInfo: (statement) => ({
+					primary: makeTableTarget(statement.schema, statement.table),
 					ancestors: [],
 				}),
 			},

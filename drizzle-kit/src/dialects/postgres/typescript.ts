@@ -277,6 +277,8 @@ export const ddlToTypeScript = (
 		if (x.entityType === 'functions' && x.schema === 'public') imports.add('pgFunction');
 		if (x.entityType === 'triggers') imports.add('pgTrigger');
 		if (x.entityType === 'extensions') imports.add('pgExtension');
+		if (x.entityType === 'replicaIdentities') imports.add('replicaIdentity');
+		if (x.entityType === 'publications') imports.add('pgPublication');
 	}
 
 	const enumStatements = ddl.enums.list().map((it) => {
@@ -382,12 +384,15 @@ export const ddlToTypeScript = (
 		);
 		statement += '}';
 
+		const identity = ddl.replicaIdentities.one({ schema: table.schema, name: table.name });
+
 		const hasCallback = table.indexes.length > 0
 			|| callbackFks.length > 0
 			|| table.policies.length > 0
 			|| primaryKeyType === 'callback'
 			|| table.uniques.length > 0
-			|| table.checks.length > 0;
+			|| table.checks.length > 0
+			|| identity !== null;
 
 		if (hasCallback) {
 			statement += ', ';
@@ -400,6 +405,11 @@ export const ddlToTypeScript = (
 			statement += createTableUniques(table.uniques, casing);
 			statement += createTablePolicies(table.policies, casing, rolesNameToTsKey);
 			statement += createTableChecks(table.checks, casing);
+			statement += identity === null
+				? ''
+				: identity.identity === 'index'
+				? `replicaIdentity({ index: ${escapeForTsLiteral(identity.index!)} }),`
+				: `replicaIdentity("${identity.identity}"),`;
 			statement += ']';
 		}
 		statement += ');';
@@ -515,6 +525,44 @@ export const ddlToTypeScript = (
 		}, {\n${lines.join('\n')}\n});`;
 	}).join('\n\n');
 
+	/*
+		A publication names its tables by their declarations, and a schema by
+		its declaration or, for `public`, by name. A table the file does not
+		declare is left out of the publication with a comment, since
+		`pgPublication` takes a declared table only.
+	*/
+	const publicationStatements = ddl.publications.list().map((it) => {
+		const tableRefs: string[] = [];
+		const missing: string[] = [];
+		for (const member of ddl.publicationTables.list({ name: it.name })) {
+			const qualified = member.schema !== 'public' ? `${member.schema}.${member.table}` : member.table;
+			if (!ddl.tables.one({ schema: member.schema, name: member.table })) {
+				missing.push(qualified);
+				continue;
+			}
+			const ref = withCasing(paramNameFor(member.table, schemas[member.schema]), casing);
+			tableRefs.push(
+				member.columns.length === 0
+					? ref
+					: `{ table: ${ref}, columns: [${member.columns.map((c) => `${ref}.${withCasing(c, casing)}`).join(', ')}] }`,
+			);
+		}
+		const schemaRefs = ddl.publicationSchemas.list({ name: it.name }).map((member) =>
+			schemas[member.schema] ?? escapeForTsLiteral(member.schema)
+		);
+		const lines = [
+			...(it.allTables ? ['\tallTables: true,'] : []),
+			...(tableRefs.length > 0 ? [`\ttables: [${tableRefs.join(', ')}],`] : []),
+			...(schemaRefs.length > 0 ? [`\tschemas: [${schemaRefs.join(', ')}],`] : []),
+			...(it.publish.length < 4 ? [`\tpublish: [${it.publish.map((p) => `"${p}"`).join(', ')}],`] : []),
+			...(it.viaRoot ? ['\tpublishViaPartitionRoot: true,'] : []),
+		];
+		const note = missing.length > 0 ? `// also sends ${missing.join(', ')}, which this file does not declare\n` : '';
+		return `${note}export const ${withCasing(`${it.name}Publication`, casing)} = pgPublication(${
+			escapeForTsLiteral(it.name)
+		}, {\n${lines.join('\n')}\n});`;
+	}).join('\n\n');
+
 	const uniquePgImports = [...imports];
 
 	const importsTs = `import { ${
@@ -536,6 +584,7 @@ import { sql } from "drizzle-orm"\n\n`;
 	decalrations += viewsStatements;
 	decalrations += grantStatements ? `\n\n${grantStatements}\n` : '';
 	decalrations += triggerStatements ? `\n\n${triggerStatements}\n` : '';
+	decalrations += publicationStatements ? `\n\n${publicationStatements}\n` : '';
 
 	const file = importsTs + decalrations;
 
