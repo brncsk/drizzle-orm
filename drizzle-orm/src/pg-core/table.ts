@@ -17,6 +17,7 @@ import type { ForeignKey, ForeignKeyBuilder } from './foreign-keys.ts';
 import type { AnyIndexBuilder } from './indexes.ts';
 import type { PgPolicy } from './policies.ts';
 import type { PrimaryKeyBuilder } from './primary-keys.ts';
+import type { PgReplicaIdentity } from './publications.ts';
 import type { UniqueConstraintBuilder } from './unique-constraint.ts';
 
 export type PgTableExtraConfigValue =
@@ -25,7 +26,8 @@ export type PgTableExtraConfigValue =
 	| ForeignKeyBuilder
 	| PrimaryKeyBuilder
 	| UniqueConstraintBuilder
-	| PgPolicy;
+	| PgPolicy
+	| PgReplicaIdentity;
 
 export type PgTableExtraConfig = Record<string, PgTableExtraConfigValue>;
 
