@@ -163,6 +163,70 @@ test('a function in a schema is created after the schema, in declaration order, 
 	await apply(dropped);
 });
 
+/*
+	A stored generated column that calls a function, the function that its
+	body calls, and a function that reads the table, which must come after it.
+*/
+const doubleIt = pgFunction('double_it', {
+	args: { a: 'integer' },
+	returns: 'integer',
+	language: 'sql',
+	attributes: 'IMMUTABLE STRICT',
+	body: 'SELECT $1 * 2',
+});
+const quadrupleIt = pgFunction('quadruple_it', {
+	args: { a: 'integer' },
+	returns: 'integer',
+	language: 'sql',
+	attributes: 'IMMUTABLE STRICT',
+	body: sql`SELECT ${doubleIt}(${doubleIt}($1))`,
+});
+const sums = pgTable('sums', {
+	id: integer('id').primaryKey(),
+	a: integer('a'),
+	b: integer('b').generatedAlwaysAs(sql`quadruple_it(a)`),
+});
+const sumsWithoutB = pgTable('sums', { id: integer('id').primaryKey(), a: integer('a') });
+const countSums = pgFunction('count_sums', {
+	returns: 'bigint',
+	language: 'sql',
+	attributes: 'STABLE',
+	body: sql`SELECT count(*) FROM ${sums}`,
+});
+
+test('a function that a generated column calls is created before its table, with the functions its body calls; a function that reads the table comes after it', async () => {
+	const { sqlStatements: created } = await diff({}, { sums, doubleIt, quadrupleIt, countSums }, []);
+	expect(created).toStrictEqual([
+		'CREATE FUNCTION "public"."double_it"(a integer) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $fn$\nSELECT $1 * 2\n$fn$;',
+		'CREATE FUNCTION "public"."quadruple_it"(a integer) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $fn$\nSELECT "double_it"("double_it"($1))\n$fn$;',
+		'CREATE TABLE "sums" (\n\t"id" integer PRIMARY KEY,\n\t"a" integer,\n\t"b" integer GENERATED ALWAYS AS (quadruple_it(a)) STORED\n);\n',
+		'CREATE FUNCTION "public"."count_sums"() RETURNS bigint LANGUAGE sql STABLE AS $fn$\nSELECT count(*) FROM "sums"\n$fn$;',
+	]);
+	await apply(created);
+	await db.query('INSERT INTO "sums" ("id", "a") VALUES (1, 3)');
+	expect(await db.query('SELECT "b" FROM "sums"')).toStrictEqual([{ b: 12 }]);
+});
+
+test('a function that an added generated column calls is created before the column, and dropped after it with the functions its body calls', async () => {
+	await apply((await diff({}, { sums: sumsWithoutB }, [])).sqlStatements);
+
+	const { sqlStatements: added } = await diff({ sums: sumsWithoutB }, { sums, doubleIt, quadrupleIt }, []);
+	expect(added).toStrictEqual([
+		'CREATE FUNCTION "public"."double_it"(a integer) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $fn$\nSELECT $1 * 2\n$fn$;',
+		'CREATE FUNCTION "public"."quadruple_it"(a integer) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $fn$\nSELECT "double_it"("double_it"($1))\n$fn$;',
+		'ALTER TABLE "sums" ADD COLUMN "b" integer GENERATED ALWAYS AS (quadruple_it(a)) STORED;',
+	]);
+	await apply(added);
+
+	const { sqlStatements: dropped } = await diff({ sums, doubleIt, quadrupleIt }, { sums: sumsWithoutB }, []);
+	expect(dropped).toStrictEqual([
+		'ALTER TABLE "sums" DROP COLUMN "b";',
+		'DROP FUNCTION "public"."quadruple_it"(integer);',
+		'DROP FUNCTION "public"."double_it"(integer);',
+	]);
+	await apply(dropped);
+});
+
 test('a dollar-quote tag the body contains is lengthened', async () => {
 	const fn = pgFunction('tagged', { returns: 'text', language: 'sql', body: `SELECT '$fn$'` });
 	const { sqlStatements } = await diff({}, { fn }, []);

@@ -26,8 +26,13 @@ export interface PgFunctionConfig {
  * A function of the database, as the schema declares it: its signature,
  * its language, its body and its comment. drizzle-kit creates it, replaces
  * it in place when its body, its attributes or its comment change, and
- * drops and recreates it when its signature changes. Interpolated into
- * `sql`, it is its qualified name, so `sql\`SELECT ${fn}(1)\`` calls it.
+ * drops and recreates it when its signature changes. It creates a function
+ * after the tables, because Postgres checks a SQL body against the tables
+ * that it reads, except one that a stored generated column calls: that
+ * one comes before the tables, with the functions that its body calls,
+ * because Postgres checks the column's expression when it creates the
+ * column. Interpolated into `sql`, it is its qualified name, so
+ * `sql\`SELECT ${fn}(1)\`` calls it.
  */
 export class PgFunction implements SQLWrapper {
 	static readonly [entityKind]: string = 'PgFunction';
