@@ -1198,7 +1198,8 @@ export const ddlDiff = async (
 		.filter((it) => !signatureChanged(it) && !it.body && !it.attributes && it.comment)
 		.map((it) => prepareStatement('comment_function', { function: it.$right }));
 
-	// created in the order the schema declares them, since a SQL body is checked when its function is created, and dropped in the reverse
+	// created in the order the schema declares them, since a SQL body is checked when its function is created, and dropped in the reverse;
+	// those that a generated column calls are split off below, before the tables
 	const isNewFunction = (fn: Function) =>
 		createdFunctions.some((c) => c.schema === fn.schema && c.name === fn.name) || recreatedFunction(fn);
 	const jsonCreateFunctions = ddl2.functions.list().filter(isNewFunction).map((it) =>
@@ -1583,6 +1584,74 @@ export const ddlDiff = async (
 			})
 		);
 
+	/*
+		Postgres checks a stored generated column's expression when it creates
+		the column, with its table or alone, so every function that the
+		expression calls must exist by then. A created function that the
+		expression of a created table's column, of an added column or of a
+		recreated column calls is created before the tables, with the created
+		functions that its body calls in turn, in the order the schema declares
+		them. The other created functions keep their place after the tables,
+		because a SQL body is checked when its function is created and may
+		read a table. A function recreated for a new signature keeps its place
+		too. Postgres also refuses to drop a function that a column's
+		expression calls, so a function dropped together with the columns that
+		call it is dropped after them, with the dropped functions that its body
+		calls in turn.
+	*/
+	const listGeneratedExpressions = (columns: readonly Column[]) =>
+		columns.flatMap((column) => (column.generated ? [column.generated.as] : []));
+	const functionKey = (fn: { schema: string; name: string }) => `${fn.schema}.${fn.name}`;
+
+	const createdExpressions = listGeneratedExpressions([
+		...createdTables.flatMap((table) => ddl2.columns.list({ schema: table.schema, table: table.name })),
+		...columnsToCreate,
+		...columnsToRecreate.map((it) => it.$right),
+	]);
+	const createdFunctionsInOrder = ddl2.functions
+		.list()
+		.filter((fn) => createdFunctions.some((c) => c.schema === fn.schema && c.name === fn.name));
+	const functionsBeforeTables = new Set<string>();
+	let reached = createdFunctionsInOrder.filter((fn) => createdExpressions.some((text) => callsFunction(fn, text)));
+
+	while (reached.length > 0) {
+		for (const fn of reached) functionsBeforeTables.add(functionKey(fn));
+		const callers = createdFunctionsInOrder.filter((fn) => functionsBeforeTables.has(functionKey(fn)));
+		reached = createdFunctionsInOrder.filter((fn) =>
+			!functionsBeforeTables.has(functionKey(fn)) && callers.some((caller) => callsFunction(fn, caller.body))
+		);
+	}
+
+	const jsonCreateFunctionsBeforeTables = jsonCreateFunctions.filter((st) =>
+		functionsBeforeTables.has(functionKey(st.function))
+	);
+	const jsonCreateFunctionsAfterTables = jsonCreateFunctions.filter((st) =>
+		!functionsBeforeTables.has(functionKey(st.function))
+	);
+
+	const droppedExpressions = listGeneratedExpressions([
+		...columnsToDelete.filter(tablesFilter('deleted')),
+		...columnsToRecreate.map((it) => it.$left),
+		...columnAlters.filter((it) => it.generated && it.generated.to === null).map((it) => it.$left),
+	]);
+	// dropped in the reverse of the order the schema declared them, so a function goes before the ones its body calls
+	const droppedFunctionsInOrder = jsonDropFunctions.filter((st) => st.cause === null).map((st) => st.function);
+	const functionsAfterColumns = new Set<string>();
+	let reachedDrops = droppedFunctionsInOrder.filter((fn) => droppedExpressions.some((text) => callsFunction(fn, text)));
+
+	while (reachedDrops.length > 0) {
+		for (const fn of reachedDrops) functionsAfterColumns.add(functionKey(fn));
+		const callers = droppedFunctionsInOrder.filter((fn) => functionsAfterColumns.has(functionKey(fn)));
+		reachedDrops = droppedFunctionsInOrder.filter((fn) =>
+			!functionsAfterColumns.has(functionKey(fn)) && callers.some((caller) => callsFunction(fn, caller.body))
+		);
+	}
+
+	const dropsAfterColumns = (st: (typeof jsonDropFunctions)[number]) =>
+		st.cause === null && functionsAfterColumns.has(functionKey(st.function));
+	const jsonDropFunctionsBeforeColumns = jsonDropFunctions.filter((st) => !dropsAfterColumns(st));
+	const jsonDropFunctionsAfterColumns = jsonDropFunctions.filter(dropsAfterColumns);
+
 	jsonStatements.push(...createSchemas);
 	jsonStatements.push(...renameSchemas);
 	// an extension is created once the schema it is installed in exists, and before anything that may need its types
@@ -1604,6 +1673,8 @@ export const ddlDiff = async (
 
 	jsonStatements.push(...jsonRevokePrivileges);
 
+	// a function that a generated column calls exists before the column (see above)
+	jsonStatements.push(...jsonCreateFunctionsBeforeTables);
 	jsonStatements.push(...createTables);
 
 	jsonStatements.push(...jsonDropViews);
@@ -1637,7 +1708,7 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonDropIndexes);
 	jsonStatements.push(...jsonDropPrimaryKeys);
 	// a function is dropped once nothing depends on it: its triggers, the indexes and the views that call it are gone by now
-	jsonStatements.push(...jsonDropFunctions);
+	jsonStatements.push(...jsonDropFunctionsBeforeColumns);
 
 	jsonStatements.push(...jsonRenameReferences);
 	jsonStatements.push(...jsonAddColumnsStatemets);
@@ -1649,9 +1720,11 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonDropColumnsStatemets);
 	jsonStatements.push(...jsonAlteredPKs);
 	jsonStatements.push(...jsonAlterColumns);
+	// a function that a dropped or changed generated column called goes once the column no longer calls it
+	jsonStatements.push(...jsonDropFunctionsAfterColumns);
 
 	// a function is created once the tables and columns its body reads exist, and before the indexes and views that call it
-	jsonStatements.push(...jsonCreateFunctions);
+	jsonStatements.push(...jsonCreateFunctionsAfterTables);
 	jsonStatements.push(...jsonReplaceFunctions);
 	jsonStatements.push(...jsonCommentFunctions);
 
