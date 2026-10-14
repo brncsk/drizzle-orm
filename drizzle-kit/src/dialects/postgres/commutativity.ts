@@ -122,6 +122,7 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 		case 'comment_function':
 			return ['function', statement.function.schema, statement.function.name];
 		case 'create_trigger':
+		case 'comment_trigger':
 		case 'drop_trigger':
 			return ['trigger', statement.trigger.schema, statement.trigger.table, statement.trigger.name];
 		case 'create_extension':
@@ -268,10 +269,10 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'grant_privilege':
 			case 'revoke_privilege':
 			case 'regrant_privilege':
-			// CREATE OR REPLACE FUNCTION, COMMENT ON, CREATE OR REPLACE TRIGGER, CREATE EXTENSION IF NOT EXISTS and ALTER EXTENSION
+			// CREATE OR REPLACE FUNCTION, COMMENT ON and CREATE EXTENSION IF NOT EXISTS
 			case 'replace_function':
 			case 'comment_function':
-			case 'create_trigger':
+			case 'comment_trigger':
 			case 'create_extension':
 			// ALTER EXTENSION ... UPDATE TO and SET SCHEMA to the version and the schema that stand already succeed
 			case 'alter_extension':
@@ -279,6 +280,9 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'alter_publication':
 			case 'alter_replica_identity':
 				return true;
+			// CREATE OR REPLACE TRIGGER runs again, CREATE CONSTRAINT TRIGGER does not.
+			case 'create_trigger':
+				return statement.trigger.constraint === null;
 			default:
 				return false;
 		}
@@ -863,13 +867,23 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'create_trigger': {
 				const t = s.trigger;
 				const key = [t.schema, t.table, t.name] as const;
+				// The comment is a node of its own, so a change of the comment and a replace commute.
+				const comment = s.from !== null && s.from.comment !== t.comment ? altered('trgprop', ...key, 'comment') : [];
 				return {
-					writes: s.from === null ? created('trg', ...key) : altered('trg', ...key),
+					writes: s.from === null ? created('trg', ...key) : [...altered('trg', ...key), ...comment],
 					reads: [
 						...underTable(t.schema, t.table),
 						nref('fn', t.functionSchema, t.functionName),
 						...(s.from === null ? [] : [nref('trg', ...key)]),
 					],
+				};
+			}
+			// COMMENT ON TRIGGER of a constraint trigger, which is not replaced in place.
+			case 'comment_trigger': {
+				const t = s.trigger;
+				return {
+					writes: altered('trgprop', t.schema, t.table, t.name, 'comment'),
+					reads: [...underTable(t.schema, t.table), nref('trg', t.schema, t.table, t.name)],
 				};
 			}
 			case 'drop_trigger':

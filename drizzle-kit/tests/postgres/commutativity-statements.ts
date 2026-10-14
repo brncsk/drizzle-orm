@@ -209,6 +209,7 @@ export const rows = (prefix = ''): Record<string, Row> => {
 		when: 'BEFORE INSERT',
 		level: 'ROW',
 		condition: null,
+		constraint: null,
 		functionSchema: schema,
 		functionName: triggerFunction.name,
 		comment: null,
@@ -706,6 +707,11 @@ export const rows = (prefix = ''): Record<string, Row> => {
 				trigger: { ...trigger, when: 'BEFORE INSERT OR UPDATE' },
 				from: trigger,
 			} as any,
+		},
+		comment_trigger: {
+			family: 'trigger',
+			needs: [...onTable, 'triggerFunction', 'trigger'],
+			statement: { type: 'comment_trigger', trigger: { ...trigger, comment: 'c' } } as any,
 		},
 		drop_trigger: {
 			family: 'trigger',

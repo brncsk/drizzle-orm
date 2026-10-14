@@ -187,6 +187,10 @@ export const createDDL = () => {
 			the function follows a rename of the function's schema and the stored
 			row stays correct. `condition` is the text inside `WHEN (...)`, as the
 			declaration writes it or as `pg_get_triggerdef` prints it.
+			`constraint` is the deferral of a constraint trigger as
+			`pg_get_triggerdef` prints it (`DEFERRABLE INITIALLY DEFERRED`,
+			`DEFERRABLE INITIALLY IMMEDIATE` or `NOT DEFERRABLE INITIALLY
+			IMMEDIATE`), and null for a plain trigger.
 		*/
 		triggers: {
 			schema: 'string',
@@ -195,6 +199,7 @@ export const createDDL = () => {
 			when: 'string',
 			level: ['ROW', 'STATEMENT'],
 			condition: 'string?',
+			constraint: 'string?',
 			functionSchema: 'string',
 			functionName: 'string',
 			comment: 'string?',
