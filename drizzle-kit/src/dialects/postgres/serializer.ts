@@ -778,6 +778,12 @@ export function generateLatestSnapshot(
 				if (statement.from) replace(ddl.triggers, statement.from, statement.trigger);
 				else push(ddl.triggers, statement.trigger);
 				break;
+			case 'comment_trigger':
+				ddl.triggers.update({
+					where: { schema: statement.trigger.schema, table: statement.trigger.table, name: statement.trigger.name },
+					set: { comment: statement.trigger.comment },
+				});
+				break;
 			case 'drop_trigger':
 				del(ddl.triggers, statement.trigger);
 				break;

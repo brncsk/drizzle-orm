@@ -154,13 +154,20 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		when: 'AFTER INSERT OR UPDATE OR DELETE',
 		level: 'ROW',
 		condition: null,
+		constraint: null,
 		function: 'acl.grants_recompile',
 	});
 	expect(
 		parseTriggerDefinition(
 			'CREATE TRIGGER "Check" BEFORE INSERT ON public.fields FOR EACH STATEMENT EXECUTE FUNCTION fields_check()',
 		),
-	).toStrictEqual({ when: 'BEFORE INSERT', level: 'STATEMENT', condition: null, function: 'public.fields_check' });
+	).toStrictEqual({
+		when: 'BEFORE INSERT',
+		level: 'STATEMENT',
+		condition: null,
+		constraint: null,
+		function: 'public.fields_check',
+	});
 	// the condition is the text inside `WHEN (...)`, with the parentheses Postgres adds inside it
 	expect(
 		parseTriggerDefinition(
@@ -170,12 +177,41 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		when: 'AFTER UPDATE',
 		level: 'ROW',
 		condition: "((old.scope IS DISTINCT FROM new.scope) OR (current_setting('x'::text, true) = 'on'::text))",
+		constraint: null,
 		function: 'tree.objects_fan_out',
 	});
-	// a transition table is not read
+	// a constraint trigger: the deferral, as Postgres prints it between the table and the level
+	expect(
+		parseTriggerDefinition(
+			'CREATE CONSTRAINT TRIGGER layers_hold AFTER INSERT OR UPDATE ON registry.layers DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION registry.layers_hold()',
+		),
+	).toStrictEqual({
+		when: 'AFTER INSERT OR UPDATE',
+		level: 'ROW',
+		condition: null,
+		constraint: 'DEFERRABLE INITIALLY DEFERRED',
+		function: 'registry.layers_hold',
+	});
+	expect(
+		parseTriggerDefinition(
+			'CREATE CONSTRAINT TRIGGER t AFTER UPDATE ON public.users NOT DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW WHEN ((old.name IS DISTINCT FROM new.name)) EXECUTE FUNCTION audit()',
+		),
+	).toStrictEqual({
+		when: 'AFTER UPDATE',
+		level: 'ROW',
+		condition: '(old.name IS DISTINCT FROM new.name)',
+		constraint: 'NOT DEFERRABLE INITIALLY IMMEDIATE',
+		function: 'public.audit',
+	});
+	// a transition table is not read, nor a constraint trigger that names a referenced table
 	expect(
 		parseTriggerDefinition(
 			'CREATE TRIGGER t AFTER INSERT ON public.users REFERENCING NEW TABLE AS added FOR EACH STATEMENT EXECUTE FUNCTION audit()',
+		),
+	).toBeNull();
+	expect(
+		parseTriggerDefinition(
+			'CREATE CONSTRAINT TRIGGER t AFTER INSERT ON public.users FROM public.roles DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION audit()',
 		),
 	).toBeNull();
 });

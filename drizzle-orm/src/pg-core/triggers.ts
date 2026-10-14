@@ -5,6 +5,21 @@ import type { PgTable } from './table.ts';
 /** When a trigger fires: `BEFORE INSERT OR UPDATE`, `AFTER DELETE`, `INSTEAD OF INSERT`, ... */
 export type PgTriggerWhen = string;
 
+/**
+ * Makes a trigger a constraint trigger (`CREATE CONSTRAINT TRIGGER`). A
+ * constraint trigger is an `AFTER ... FOR EACH ROW` trigger whose calls
+ * can wait until the end of the transaction. With `initiallyDeferred`,
+ * Postgres queues the call of each row and runs the calls at `COMMIT` (or
+ * at `SET CONSTRAINTS ... IMMEDIATE`), so the function sees the final
+ * state of the transaction, and an error refuses the commit.
+ */
+export interface PgConstraintTriggerConfig {
+	/** The calls can wait until the end of the transaction (`DEFERRABLE`). `NOT DEFERRABLE` when left out. */
+	deferrable?: boolean;
+	/** The calls wait until the end of the transaction unless `SET CONSTRAINTS` says otherwise (`INITIALLY DEFERRED`). It needs `deferrable`. `INITIALLY IMMEDIATE` when left out. */
+	initiallyDeferred?: boolean;
+}
+
 export interface PgTriggerConfig {
 	/** The table the trigger is bound to: the declared table, or its name (`schema.table` when not in `public`). */
 	on: PgTable | string;
@@ -19,6 +34,12 @@ export interface PgTriggerConfig {
 	 * it queues no event, so the function is not entered at all.
 	 */
 	condition?: string;
+	/**
+	 * Makes the trigger a constraint trigger, with its deferral. Postgres
+	 * accepts a constraint trigger only at `AFTER` and at the `ROW` level.
+	 * A plain trigger when left out.
+	 */
+	constraint?: PgConstraintTriggerConfig;
 	/** The trigger function: the declared function, or its qualified name. It takes no parameters and returns `trigger`. */
 	function: PgFunction | string;
 	/** The comment the trigger carries in the database (`COMMENT ON TRIGGER`). */
@@ -27,9 +48,11 @@ export interface PgTriggerConfig {
 
 /**
  * A trigger of a table, as the schema declares it: when it fires, at which
- * level, on which condition, and the function it calls. drizzle-kit creates it after its table
- * and its function exist, replaces it in place when it changes, and drops
- * it before the function it calls is dropped.
+ * level, on which condition, whether it is a constraint trigger, and the
+ * function it calls. drizzle-kit creates it after its table and its
+ * function exist, replaces it in place when it changes (a constraint
+ * trigger is dropped and created again, since Postgres cannot replace
+ * one), and drops it before the function it calls is dropped.
  */
 export class PgTrigger {
 	static readonly [entityKind]: string = 'PgTrigger';
@@ -39,6 +62,7 @@ export class PgTrigger {
 	readonly when: PgTriggerWhen;
 	readonly level: 'ROW' | 'STATEMENT';
 	readonly condition: string | undefined;
+	readonly constraint: Required<PgConstraintTriggerConfig> | undefined;
 	readonly function: PgFunction | string;
 	readonly comment: string | undefined;
 
@@ -54,6 +78,18 @@ export class PgTrigger {
 		this.when = config.when;
 		this.level = config.level ?? 'ROW';
 		this.condition = config.condition;
+		if (config.constraint && (!/^\s*AFTER\b/i.test(config.when) || this.level !== 'ROW')) {
+			throw new Error(`Trigger "${name}" is a constraint trigger, so it fires AFTER and FOR EACH ROW`);
+		}
+		if (config.constraint?.initiallyDeferred && !config.constraint.deferrable) {
+			throw new Error(`Trigger "${name}" is initially deferred, so it must be deferrable`);
+		}
+		this.constraint = config.constraint
+			? {
+				deferrable: config.constraint.deferrable ?? false,
+				initiallyDeferred: config.constraint.initiallyDeferred ?? false,
+			}
+			: undefined;
 		this.function = config.function;
 		this.comment = config.comment;
 	}
@@ -68,6 +104,14 @@ export class PgTrigger {
  * 	on: users,
  * 	when: 'AFTER INSERT OR UPDATE',
  * 	function: auditRow,
+ * });
+ *
+ * // checked at COMMIT, against the final state of the transaction
+ * export const ordersBalanced = pgTrigger('orders_balanced', {
+ * 	on: orders,
+ * 	when: 'AFTER INSERT OR UPDATE',
+ * 	constraint: { deferrable: true, initiallyDeferred: true },
+ * 	function: checkBalance,
  * });
  * ```
  */

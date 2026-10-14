@@ -154,7 +154,12 @@ export const createDDL = () => {
 		/*
 			A trigger belongs to its table; `function` is the qualified name of
 			the function it calls; `condition` is the text inside `WHEN (...)`,
-			as the declaration writes it or as `pg_get_triggerdef` prints it.
+			as the declaration writes it or as `pg_get_triggerdef` prints it;
+			`constraint` is the deferral of a constraint trigger as
+			`pg_get_triggerdef` prints it (`DEFERRABLE INITIALLY DEFERRED`,
+			`DEFERRABLE INITIALLY IMMEDIATE` or `NOT DEFERRABLE INITIALLY
+			IMMEDIATE`), and null for a plain trigger. It is nullable, so a
+			snapshot written before it existed reads as plain triggers.
 		*/
 		triggers: {
 			schema: 'required',
@@ -162,6 +167,7 @@ export const createDDL = () => {
 			when: 'string',
 			level: ['ROW', 'STATEMENT'],
 			condition: 'string?',
+			constraint: 'string?',
 			function: 'string',
 			comment: 'string?',
 		},

@@ -1061,13 +1061,21 @@ const createTriggerConvertor = convertor('create_trigger', (st) => {
 	const [schema, name] = trigger.function.includes('.')
 		? trigger.function.split('.', 2)
 		: ['public', trigger.function];
+	// Postgres cannot replace a constraint trigger, so the diff drops one before it creates it again
+	const create = trigger.constraint !== null ? 'CREATE CONSTRAINT TRIGGER' : 'CREATE OR REPLACE TRIGGER';
 	const statements = [
-		`CREATE OR REPLACE TRIGGER "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)} FOR EACH ${trigger.level}${
+		`${create} "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)}${
+			trigger.constraint !== null ? ` ${trigger.constraint}` : ''
+		} FOR EACH ${trigger.level}${
 			trigger.condition ? ` WHEN (${trigger.condition})` : ''
 		} EXECUTE FUNCTION "${schema}"."${name}"();`,
 	];
 	if (trigger.comment !== (from?.comment ?? null)) statements.push(triggerCommentStatement(trigger));
 	return statements;
+});
+
+const commentTriggerConvertor = convertor('comment_trigger', (st) => {
+	return triggerCommentStatement(st.trigger);
 });
 
 const dropTriggerConvertor = convertor('drop_trigger', (st) => {
@@ -1303,6 +1311,7 @@ const convertors = [
 	dropFunctionConvertor,
 	commentFunctionConvertor,
 	createTriggerConvertor,
+	commentTriggerConvertor,
 	dropTriggerConvertor,
 	createExtensionConvertor,
 	dropExtensionConvertor,

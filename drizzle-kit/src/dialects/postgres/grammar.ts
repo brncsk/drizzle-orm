@@ -2602,23 +2602,52 @@ export const normalizeTriggerWhen = (when: string) => {
 };
 
 /**
+ * The deferral of a constraint trigger, as `pg_get_triggerdef` prints it
+ * and as `CREATE CONSTRAINT TRIGGER` takes it: `DEFERRABLE INITIALLY
+ * DEFERRED`, `DEFERRABLE INITIALLY IMMEDIATE` or `NOT DEFERRABLE
+ * INITIALLY IMMEDIATE`. A declaration and its introspection then compare
+ * equal.
+ */
+export const renderTriggerDeferral = (constraint: { deferrable: boolean; initiallyDeferred: boolean }) =>
+	`${constraint.deferrable ? '' : 'NOT '}DEFERRABLE INITIALLY ${
+		constraint.initiallyDeferred ? 'DEFERRED' : 'IMMEDIATE'
+	}`;
+
+/** The `constraint` option of `pgTrigger()` that declares a deferral ({@link renderTriggerDeferral}), as `pull` writes it. */
+export const renderTriggerConstraintOption = (deferral: string) => {
+	const deferrable = !deferral.startsWith('NOT ');
+	const initiallyDeferred = deferral.endsWith(' DEFERRED');
+	const options = [
+		...(deferrable ? ['deferrable: true'] : []),
+		...(initiallyDeferred ? ['initiallyDeferred: true'] : []),
+	];
+	return options.length > 0 ? `{ ${options.join(', ')} }` : '{}';
+};
+
+/**
  * What `pg_get_triggerdef` prints, taken apart: the timing with the events,
  * the level, the `WHEN` condition (the text inside its parentheses, as
- * Postgres prints it; null when there is none) and the called function's
- * qualified name; null for a text this does not read (a constraint
- * trigger, a transition table), which stays outside the schema's reach.
+ * Postgres prints it; null when there is none), the deferral of a
+ * constraint trigger (null for a plain trigger) and the called function's
+ * qualified name; null for a text this does not read (a transition table,
+ * a constraint trigger with `FROM`), which stays outside the schema's
+ * reach.
  */
 export const parseTriggerDefinition = (definition: string) => {
 	const m =
-		/^CREATE TRIGGER \S+ (BEFORE|AFTER|INSTEAD OF) (.+?) ON \S+ FOR EACH (ROW|STATEMENT)(?: WHEN \((.+)\))? EXECUTE (?:FUNCTION|PROCEDURE) (.+)\(\)$/s
+		/^CREATE (?<constraint>CONSTRAINT )?TRIGGER \S+ (?<timing>BEFORE|AFTER|INSTEAD OF) (?<events>.+?) ON \S+ (?:(?<deferral>(?:NOT )?DEFERRABLE INITIALLY (?:IMMEDIATE|DEFERRED)) )?FOR EACH (?<level>ROW|STATEMENT)(?: WHEN \((?<condition>.+)\))? EXECUTE (?:FUNCTION|PROCEDURE) (?<function>.+)\(\)$/s
 			.exec(definition.trim());
-	if (!m) return null;
-	const qualified = m[5].split('.').map((part) => trimChar(part, '"'));
+	if (!m?.groups) return null;
+	const { constraint, timing, events, deferral, level, condition, function: called } = m.groups;
+	// Postgres prints the deferral of every constraint trigger, and of no other trigger
+	if (!constraint !== !deferral) return null;
+	const qualified = called!.split('.').map((part) => trimChar(part, '"'));
 	const fn = qualified.length === 2 ? `${qualified[0]}.${qualified[1]}` : `public.${qualified[qualified.length - 1]}`;
 	return {
-		when: normalizeTriggerWhen(`${m[1]} ${m[2]}`),
-		level: m[3] as 'ROW' | 'STATEMENT',
-		condition: m[4] ?? null,
+		when: normalizeTriggerWhen(`${timing} ${events}`),
+		level: level as 'ROW' | 'STATEMENT',
+		condition: condition ?? null,
+		constraint: deferral ?? null,
 		function: fn,
 	};
 };

@@ -1234,19 +1234,39 @@ export const ddlDiff = async (
 	const triggersToDrop = ddl1.triggers.list().filter((it) =>
 		goneFunctions.has(it.function) && !deletedTriggers.some((d) => sameTrigger(d, it))
 	);
-	const droppedTrigger = (it: Trigger) => triggersToDrop.some((d) => sameTrigger(d, it));
+	/*
+		Postgres has no `CREATE OR REPLACE` for a constraint trigger, and does
+		not replace a constraint trigger with a plain one either. So a change
+		of a trigger that is or becomes a constraint trigger drops it and
+		creates it again, and a change of its comment alone is a `COMMENT ON
+		TRIGGER`
+	*/
+	const constraintTriggerAlters = triggerAlters.filter((it) =>
+		(it.$left.constraint !== null || it.$right.constraint !== null)
+		&& !triggersToDrop.some((d) => sameTrigger(d, it.$left))
+	);
+	const commentAloneChanged = (it: DiffEntities['triggers']) =>
+		!!it.comment && !it.when && !it.level && !it.condition && !it.constraint && !it.function;
+	const triggersToRecreate = constraintTriggerAlters.filter((it) => !commentAloneChanged(it)).map((it) => it.$left);
+	const triggersToComment = constraintTriggerAlters.filter(commentAloneChanged).map((it) => it.$right);
+	const droppedTrigger = (it: Trigger) =>
+		triggersToDrop.some((d) => sameTrigger(d, it)) || triggersToRecreate.some((d) => sameTrigger(d, it));
 	// a trigger on a dropped table goes with the table
 	const jsonDropTriggers = [
 		...deletedTriggers
 			.filter((it) => ddl2.tables.one({ schema: it.schema, name: it.table }))
 			.map((it) => prepareStatement('drop_trigger', { trigger: it })),
 		...triggersToDrop.map((it) => prepareStatement('drop_trigger', { trigger: it })),
+		...triggersToRecreate.map((it) => prepareStatement('drop_trigger', { trigger: it })),
 	];
 	const jsonCreateTriggers = [
 		...createdTriggers.map((it) => prepareStatement('create_trigger', { trigger: it, from: null })),
-		...triggerAlters.map((it) =>
-			prepareStatement('create_trigger', { trigger: it.$right, from: droppedTrigger(it.$left) ? null : it.$left })
-		),
+		...triggerAlters
+			.filter((it) => !triggersToComment.some((c) => sameTrigger(c, it.$right)))
+			.map((it) =>
+				prepareStatement('create_trigger', { trigger: it.$right, from: droppedTrigger(it.$left) ? null : it.$left })
+			),
+		...triggersToComment.map((it) => prepareStatement('comment_trigger', { trigger: it })),
 		...ddl2.triggers
 			.list()
 			.filter((it) =>

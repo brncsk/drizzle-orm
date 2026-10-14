@@ -339,6 +339,144 @@ test('a trigger condition is written as `WHEN`, replaced in place, and on a push
 	expect((await ddlDiffDry(printed, none, 'push')).sqlStatements).toStrictEqual(unconditional);
 });
 
+test('a constraint trigger is created with its deferral, dropped and created again when it changes, and commented alone', async () => {
+	const check = pgFunction('check_users', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NULL; END',
+	});
+	const trigger = (config: Partial<Parameters<typeof pgTrigger>[1]> = {}) =>
+		pgTrigger('users_check', {
+			on: users,
+			when: 'AFTER INSERT OR UPDATE',
+			constraint: { deferrable: true, initiallyDeferred: true },
+			function: check,
+			comment: 'Checks the users at commit.',
+			...config,
+		});
+	const schema1 = { users, check, trigger: trigger() };
+
+	const { sqlStatements: created } = await diff({}, schema1, []);
+	expect(created.slice(-2)).toStrictEqual([
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER INSERT OR UPDATE ON "users" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "public"."check_users"();',
+		`COMMENT ON TRIGGER "users_check" ON "users" IS 'Checks the users at commit.';`,
+	]);
+	await apply(created);
+
+	// Postgres cannot replace a constraint trigger: a change drops it and creates it again, with its comment
+	const onDeleteToo = trigger({ when: 'AFTER INSERT OR UPDATE OR DELETE' });
+	const { sqlStatements: recreated } = await diff(schema1, { ...schema1, trigger: onDeleteToo }, []);
+	expect(recreated).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER INSERT OR UPDATE OR DELETE ON "users" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "public"."check_users"();',
+		`COMMENT ON TRIGGER "users_check" ON "users" IS 'Checks the users at commit.';`,
+	]);
+	await apply(recreated);
+
+	const immediate = trigger({ when: 'AFTER INSERT OR UPDATE OR DELETE', constraint: { deferrable: true } });
+	const { sqlStatements: undeferred } = await diff({ ...schema1, trigger: onDeleteToo }, {
+		...schema1,
+		trigger: immediate,
+	}, []);
+	expect(undeferred.slice(0, 2)).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER INSERT OR UPDATE OR DELETE ON "users" DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION "public"."check_users"();',
+	]);
+	await apply(undeferred);
+
+	// a change of the comment alone is a comment
+	const recommented = trigger({
+		when: 'AFTER INSERT OR UPDATE OR DELETE',
+		constraint: { deferrable: true },
+		comment: 'Checks the users.',
+	});
+	const { sqlStatements: commented } = await diff({ ...schema1, trigger: immediate }, {
+		...schema1,
+		trigger: recommented,
+	}, []);
+	expect(commented).toStrictEqual([`COMMENT ON TRIGGER "users_check" ON "users" IS 'Checks the users.';`]);
+	await apply(commented);
+
+	// a plain trigger of the same name replaces the constraint trigger after a drop, and the other way round
+	const plain = trigger({
+		when: 'AFTER INSERT OR UPDATE OR DELETE',
+		constraint: undefined,
+		comment: 'Checks the users.',
+	});
+	const { sqlStatements: toPlain } = await diff(
+		{ ...schema1, trigger: recommented },
+		{ ...schema1, trigger: plain },
+		[],
+	);
+	expect(toPlain).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'CREATE OR REPLACE TRIGGER "users_check" AFTER INSERT OR UPDATE OR DELETE ON "users" FOR EACH ROW EXECUTE FUNCTION "public"."check_users"();',
+		`COMMENT ON TRIGGER "users_check" ON "users" IS 'Checks the users.';`,
+	]);
+	await apply(toPlain);
+	const { sqlStatements: toConstraint } = await diff({ ...schema1, trigger: plain }, {
+		...schema1,
+		trigger: recommented,
+	}, []);
+	expect(toConstraint).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER INSERT OR UPDATE OR DELETE ON "users" DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION "public"."check_users"();',
+		`COMMENT ON TRIGGER "users_check" ON "users" IS 'Checks the users.';`,
+	]);
+	await apply(toConstraint);
+
+	// the deferral is compared as Postgres prints it, so a push of the same declaration changes nothing
+	const { ddl: declared } = drizzleToDDL({ ...schema1, trigger: recommented });
+	const { ddl: plainDdl } = drizzleToDDL({ ...schema1, trigger: plain });
+	expect((await ddlDiffDry(declared, declared, 'push')).sqlStatements).toStrictEqual([]);
+	expect((await ddlDiffDry(plainDdl, declared, 'push')).sqlStatements).toStrictEqual(toConstraint);
+
+	// Postgres takes a constraint trigger at AFTER and FOR EACH ROW only, and an initially deferred one must be deferrable
+	expect(() => trigger({ when: 'BEFORE INSERT' })).toThrow(/constraint trigger, so it fires AFTER and FOR EACH ROW/);
+	expect(() => trigger({ level: 'STATEMENT' })).toThrow(/constraint trigger, so it fires AFTER and FOR EACH ROW/);
+	expect(() => trigger({ constraint: { initiallyDeferred: true } })).toThrow(
+		/initially deferred, so it must be deferrable/,
+	);
+});
+
+test('a constraint trigger is dropped before its function and created again after it', async () => {
+	const check = pgFunction('check_users', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NULL; END',
+	});
+	const schema1 = {
+		users,
+		check,
+		trigger: pgTrigger('users_check', {
+			on: users,
+			when: 'AFTER INSERT',
+			constraint: { deferrable: true, initiallyDeferred: true },
+			function: check,
+		}),
+	};
+	await apply((await diff({}, schema1, [])).sqlStatements);
+
+	const renamed = pgFunction('check_rows', config(check));
+	const { sqlStatements } = await diff(schema1, {
+		users,
+		check: renamed,
+		trigger: pgTrigger('users_check', {
+			on: users,
+			when: 'AFTER INSERT',
+			constraint: { deferrable: true, initiallyDeferred: true },
+			function: renamed,
+		}),
+	}, []);
+	expect(sqlStatements).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'DROP FUNCTION "public"."check_users"();',
+		'CREATE FUNCTION "public"."check_rows"() RETURNS trigger LANGUAGE plpgsql AS $fn$\nBEGIN RETURN NULL; END\n$fn$;',
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER INSERT ON "users" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "public"."check_rows"();',
+	]);
+	await apply(sqlStatements);
+});
+
 test('an extension is created first and dropped last', async () => {
 	const plpgsql = pgExtension('plpgsql');
 	const acl = pgSchema('acl');
@@ -400,6 +538,13 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 			condition: 'OLD.name IS DISTINCT FROM NEW.name',
 			function: audit,
 		}),
+		held: pgTrigger('users_held', {
+			on: users,
+			when: 'AFTER INSERT OR UPDATE',
+			constraint: { deferrable: true, initiallyDeferred: true },
+			function: audit,
+			comment: 'Checks a write at commit.',
+		}),
 		citext: pgExtension('citext'),
 	};
 	const { pushSqlStatements, generateSqlStatements, ddlAfterPull } = await diffIntrospect(
@@ -433,6 +578,7 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		when: 'AFTER INSERT OR UPDATE OR DELETE',
 		level: 'ROW',
 		condition: null,
+		constraint: null,
 		function: 'public.audit_users',
 		comment: 'Audits every write.',
 	}, {
@@ -444,8 +590,20 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		level: 'ROW',
 		// as Postgres prints it
 		condition: '(old.name IS DISTINCT FROM new.name)',
+		constraint: null,
 		function: 'public.audit_users',
 		comment: null,
+	}, {
+		entityType: 'triggers',
+		schema: 'public',
+		table: 'users',
+		name: 'users_held',
+		when: 'AFTER INSERT OR UPDATE',
+		level: 'ROW',
+		condition: null,
+		constraint: 'DEFERRABLE INITIALLY DEFERRED',
+		function: 'public.audit_users',
+		comment: 'Checks a write at commit.',
 	}]);
 	// the extensions the database holds, the two the test database comes with among them, without a pinned version in the file
 	expect(ddlAfterPull.extensions.list().map((it) => it.name)).toStrictEqual(['citext', 'pg_trgm', 'vector']);

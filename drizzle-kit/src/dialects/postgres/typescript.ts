@@ -21,7 +21,14 @@ import type {
 	ViewColumn,
 } from './ddl';
 import { tableFromDDL } from './ddl';
-import { defaultNameForFK, defaultNameForIdentitySequence, defaultNameForPK, defaults, typeFor } from './grammar';
+import {
+	defaultNameForFK,
+	defaultNameForIdentitySequence,
+	defaultNameForPK,
+	defaults,
+	renderTriggerConstraintOption,
+	typeFor,
+} from './grammar';
 
 // TODO: omit defaults opclass... improvement
 const imports = [
@@ -517,6 +524,7 @@ export const ddlToTypeScript = (
 			`\twhen: ${escapeForTsLiteral(it.when)},`,
 			...(it.level !== 'ROW' ? [`\tlevel: ${escapeForTsLiteral(it.level)},`] : []),
 			...(it.condition !== null ? [`\tcondition: ${escapeForTsLiteral(it.condition)},`] : []),
+			...(it.constraint !== null ? [`\tconstraint: ${renderTriggerConstraintOption(it.constraint)},`] : []),
 			`\tfunction: ${fn},`,
 			...(it.comment !== null ? [`\tcomment: ${escapeForTsLiteral(it.comment)},`] : []),
 		];

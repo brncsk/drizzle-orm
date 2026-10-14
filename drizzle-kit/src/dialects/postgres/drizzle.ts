@@ -83,6 +83,7 @@ import {
 	normalizeTriggerWhen,
 	Point,
 	privilegeName,
+	renderTriggerDeferral,
 	splitSqlType,
 	stringFromIdentityProperty,
 	trimDefaultValueSuffix,
@@ -898,6 +899,7 @@ export const fromDrizzleSchema = (
 			when: normalizeTriggerWhen(trigger.when),
 			level: trigger.level,
 			condition: trigger.condition?.trim() || null,
+			constraint: trigger.constraint ? renderTriggerDeferral(trigger.constraint) : null,
 			function: functionName,
 			comment: trigger.comment ?? null,
 		});

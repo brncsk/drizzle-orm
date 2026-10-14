@@ -808,7 +808,7 @@ export const fromDatabase = async (
 
 	for (const it of triggersList) {
 		const parsed = parseTriggerDefinition(it.definition);
-		// a trigger this does not read (a constraint trigger, a transition table) stays outside the schema
+		// a trigger this does not read (a transition table, a constraint trigger with `FROM`) stays outside the schema
 		if (!parsed) continue;
 		triggers.push({
 			entityType: 'triggers',
@@ -818,6 +818,7 @@ export const fromDatabase = async (
 			when: parsed.when,
 			level: parsed.level,
 			condition: parsed.condition,
+			constraint: parsed.constraint,
 			function: parsed.function,
 			comment: it.comment,
 		});

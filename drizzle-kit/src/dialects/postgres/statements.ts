@@ -431,11 +431,22 @@ export interface JsonCommentFunction {
 	function: Function;
 }
 
-/** `CREATE OR REPLACE TRIGGER`: a new trigger, or one whose timing, level, function or comment changed. */
+/**
+ * `CREATE OR REPLACE TRIGGER`: a new trigger, or one whose timing, level,
+ * condition, function or comment changed. A constraint trigger is
+ * `CREATE CONSTRAINT TRIGGER`, which cannot replace, so the diff drops a
+ * changed one first.
+ */
 export interface JsonCreateTrigger {
 	type: 'create_trigger';
 	trigger: Trigger;
 	from: Trigger | null;
+}
+
+/** `COMMENT ON TRIGGER`: the comment alone of a constraint trigger changed, which is not replaced in place. */
+export interface JsonCommentTrigger {
+	type: 'comment_trigger';
+	trigger: Trigger;
 }
 
 export interface JsonDropTrigger {
@@ -573,6 +584,7 @@ export type JsonStatement =
 	| JsonDropFunction
 	| JsonCommentFunction
 	| JsonCreateTrigger
+	| JsonCommentTrigger
 	| JsonDropTrigger
 	| JsonCreateExtension
 	| JsonDropExtension

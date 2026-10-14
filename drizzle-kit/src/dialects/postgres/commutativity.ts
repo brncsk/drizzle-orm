@@ -87,6 +87,7 @@ const functionConflicts: JsonStatement['type'][] = [
 	'replace_view',
 	'alter_view',
 	'create_trigger',
+	'comment_trigger',
 	'drop_trigger',
 	'create_index',
 	'drop_index',
@@ -96,6 +97,7 @@ const functionConflicts: JsonStatement['type'][] = [
 /** What a trigger's create or drop keeps its order against: its table, its function, and the other triggers of the table. */
 const triggerConflicts: JsonStatement['type'][] = [
 	'create_trigger',
+	'comment_trigger',
 	'drop_trigger',
 	'create_function',
 	'replace_function',
@@ -773,6 +775,13 @@ class PostgresCommutativity extends AbstractCommutativity<
 
 			// Trigger operations: on the table, after its function
 			create_trigger: {
+				conflicts: triggerConflicts,
+				buildInfo: (statement) => ({
+					primary: makeTarget(statement.trigger.schema, statement.trigger.table),
+					ancestors: [],
+				}),
+			},
+			comment_trigger: {
 				conflicts: triggerConflicts,
 				buildInfo: (statement) => ({
 					primary: makeTarget(statement.trigger.schema, statement.trigger.table),
