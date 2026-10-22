@@ -20,6 +20,7 @@ const ROLE_TYPES = new Set([
 	'alter_role',
 	'create_extension',
 	'drop_extension',
+	'alter_extension',
 ]);
 // types whose target is the table itself or a child/aspect of the table
 const UNDER_TABLE = new Set([

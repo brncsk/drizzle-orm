@@ -126,6 +126,7 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 			return ['trigger', statement.trigger.schema, statement.trigger.table, statement.trigger.name];
 		case 'create_extension':
 		case 'drop_extension':
+		case 'alter_extension':
 			return ['extension', statement.extension.name];
 
 		case 'grant_privilege':
@@ -253,11 +254,13 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'grant_privilege':
 			case 'revoke_privilege':
 			case 'regrant_privilege':
-			// CREATE OR REPLACE FUNCTION, COMMENT ON, CREATE OR REPLACE TRIGGER and CREATE EXTENSION IF NOT EXISTS
+			// CREATE OR REPLACE FUNCTION, COMMENT ON, CREATE OR REPLACE TRIGGER, CREATE EXTENSION IF NOT EXISTS and ALTER EXTENSION
 			case 'replace_function':
 			case 'comment_function':
 			case 'create_trigger':
 			case 'create_extension':
+			// ALTER EXTENSION ... UPDATE TO and SET SCHEMA to the version and the schema that stand already succeed
+			case 'alter_extension':
 				return true;
 			default:
 				return false;
@@ -859,7 +862,16 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'create_extension':
 				return {
 					writes: created('ext', s.extension.name),
-					reads: s.extension.schema === null ? [] : [nref('sch', s.extension.schema)],
+					reads: s.extension.namespace === null ? [] : [nref('sch', s.extension.namespace)],
+				};
+			// ALTER EXTENSION ... UPDATE TO and SET SCHEMA keep the extension. SET SCHEMA names the new schema.
+			case 'alter_extension':
+				return {
+					writes: altered('ext', s.extension.name),
+					reads: [
+						nref('ext', s.extension.name),
+						...(s.extension.namespace === null ? [] : [nref('sch', s.extension.namespace)]),
+					],
 				};
 			case 'drop_extension':
 				return { writes: created('ext', s.extension.name) };

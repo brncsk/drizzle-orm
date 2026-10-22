@@ -210,7 +210,7 @@ export const rows = (prefix = ''): Record<string, Row> => {
 		comment: null,
 	};
 	// The ground-truth test needs an extension that PGlite can create, so the name without a prefix is `citext`.
-	const extension = { name: named('citext'), schema: null, version: null, cascade: false };
+	const extension = { name: named('citext'), namespace: null, version: null, cascade: false };
 
 	const createTable = (name: string, columns: Column[]) =>
 		({
@@ -705,6 +705,15 @@ export const rows = (prefix = ''): Record<string, Row> => {
 			needs: [],
 			isCreate: true,
 			statement: { type: 'create_extension', extension } as any,
+		},
+		alter_extension: {
+			family: 'extension',
+			needs: ['targetSchema', 'extension'],
+			statement: {
+				type: 'alter_extension',
+				extension: { ...extension, namespace: targetSchema },
+				from: extension,
+			} as any,
 		},
 		drop_extension: {
 			family: 'extension',

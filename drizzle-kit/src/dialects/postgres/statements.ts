@@ -474,6 +474,13 @@ export interface JsonDropExtension {
 	extension: Extension;
 }
 
+/** `ALTER EXTENSION ... UPDATE TO` and `SET SCHEMA`: the declared version or schema differs from the installed one. */
+export interface JsonAlterExtension {
+	type: 'alter_extension';
+	extension: Extension;
+	from: Extension;
+}
+
 export type JsonStatement =
 	| JsonCreateTable
 	| JsonDropTable
@@ -540,6 +547,7 @@ export type JsonStatement =
 	| JsonDropTrigger
 	| JsonCreateExtension
 	| JsonDropExtension
+	| JsonAlterExtension
 	| JsonAlterCheck
 	| JsonRecreateIndex;
 

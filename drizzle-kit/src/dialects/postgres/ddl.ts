@@ -197,10 +197,18 @@ export const createDDL = () => {
 			functionName: 'string',
 			comment: 'string?',
 		},
-		/* An extension is one by name in the database. `schema` is where its objects are installed, null for the default. */
+		/*
+			An extension is one by name in the database. `namespace` is the
+			`SCHEMA` its objects are installed in, null for the default. It is
+			not called `schema`, because an alter row carries `schema` as a plain
+			value, and the namespace of an extension can change. `namespace` and
+			`version` are compared only where a declaration states them, since
+			an installed extension always has both and a declaration that says
+			nothing accepts what stands.
+		*/
 		extensions: {
 			name: 'string',
-			schema: 'string?',
+			namespace: 'string?',
 			version: 'string?',
 			cascade: 'boolean',
 		},
@@ -293,7 +301,7 @@ export const createDDL = () => {
 			],
 			// An extension installed in a schema follows a rename of the schema. A drop of the schema keeps the
 			// row: the diff drops the extension on its own.
-			extensions: [{ to: 'schemas', cascade: false, when: (r) => r.schema !== null, map: { name: 'schema' } }],
+			extensions: [{ to: 'schemas', cascade: false, when: (r) => r.namespace !== null, map: { name: 'namespace' } }],
 			checks: [{ to: 'tables', map: { schema: 'schema', name: 'table' } }],
 			// The `roles` edges of policies and privileges apply a role rename to the rows that name the role.
 			// They have `cascade: false`, so a drop of the role keeps these rows.
