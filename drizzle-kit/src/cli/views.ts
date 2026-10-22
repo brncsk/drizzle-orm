@@ -1095,6 +1095,31 @@ export const postgresSchemaError = (error: PostgresSchemaError): string => {
 		);
 	}
 
+	if (error.type === 'publication_duplicate') {
+		const publicationName = chalk.underline.blue(`'${error.name}'`);
+		return withStyle.errorWarning(`There's a duplicate publication ${publicationName}`);
+	}
+
+	if (error.type === 'publication_table_duplicate') {
+		const publicationName = chalk.underline.blue(`'${error.publication}'`);
+		const tableName = chalk.underline.blue(`'${error.schema}.${error.table}'`);
+		return withStyle.errorWarning(`Publication ${publicationName} names table ${tableName} twice`);
+	}
+
+	if (error.type === 'publication_schema_duplicate') {
+		const publicationName = chalk.underline.blue(`'${error.publication}'`);
+		const schemaName = chalk.underline.blue(`'${error.schema}'`);
+		return withStyle.errorWarning(`Publication ${publicationName} names schema ${schemaName} twice`);
+	}
+
+	if (error.type === 'replica_identity_index_missing') {
+		const tableName = chalk.underline.blue(`'${error.schema}.${error.table}'`);
+		const indexName = chalk.underline.blue(`'${error.index}'`);
+		return withStyle.errorWarning(
+			`Table ${tableName} uses index ${indexName} as its replica identity, but has no unique index or unique constraint by that name`,
+		);
+	}
+
 	assertUnreachable(error);
 };
 

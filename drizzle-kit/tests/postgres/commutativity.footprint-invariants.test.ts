@@ -21,6 +21,10 @@ const ROLE_TYPES = new Set([
 	'create_extension',
 	'drop_extension',
 	'alter_extension',
+	// publications are database level, and a publication without tables or schemas names no schema
+	'create_publication',
+	'alter_publication',
+	'drop_publication',
 ]);
 // types whose target is the table itself or a child/aspect of the table
 const UNDER_TABLE = new Set([

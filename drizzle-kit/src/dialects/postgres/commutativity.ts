@@ -128,6 +128,18 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 		case 'drop_extension':
 		case 'alter_extension':
 			return ['extension', statement.extension.name];
+		case 'create_publication':
+		case 'drop_publication':
+		case 'alter_publication':
+			return ['publication', statement.publication.name];
+		case 'add_publication_table':
+		case 'drop_publication_table':
+			return ['publication', statement.table.name];
+		case 'add_publication_schema':
+		case 'drop_publication_schema':
+			return ['publication', statement.schema.name];
+		case 'alter_replica_identity':
+			return ['table', statement.schema, statement.table];
 
 		case 'grant_privilege':
 		case 'revoke_privilege':
@@ -200,6 +212,8 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			description = `${action}: ${target.name} role`;
 		} else if (target.kind === 'extension') {
 			description = `${action}: ${target.name} extension`;
+		} else if (target.kind === 'publication') {
+			description = `${action}: ${target.name} publication`;
 		} else if (target.kind === 'index' || target.kind === 'column' || target.kind === 'trigger') {
 			description = `${action}: ${target.name} on ${target.table} table`;
 		} else if (target.kind === 'schema') {
@@ -261,6 +275,9 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'create_extension':
 			// ALTER EXTENSION ... UPDATE TO and SET SCHEMA to the version and the schema that stand already succeed
 			case 'alter_extension':
+			// ALTER PUBLICATION ... SET and ALTER TABLE ... REPLICA IDENTITY set a value
+			case 'alter_publication':
+			case 'alter_replica_identity':
 				return true;
 			default:
 				return false;
@@ -371,6 +388,9 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			index.isUnique && !index.where && index.columns.every((c) => !c.isExpression)
 				? [uniqueness(index.schema, index.table, index.columns.map((c) => c.value))]
 				: [];
+		// Returns what a table in a publication reads of the columns of its list: their names, and their types.
+		const listedColumns = (t: { schema: string; table: string; columns: string[] }) =>
+			t.columns.flatMap((c) => [nref('col', t.schema, t.table, c), self('colprop', t.schema, t.table, c, 'type')]);
 		const policyRoles = (policy: { roles: string[] }) =>
 			policy.roles.filter((role) => !builtinPolicyRoles.includes(role)).map((role) => nref('role', role));
 
@@ -875,6 +895,76 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 				};
 			case 'drop_extension':
 				return { writes: created('ext', s.extension.name) };
+
+			// ---- publications (database level) ----
+			// A table or a schema in a publication is a node of its own, so adding and dropping different members on
+			// two branches commutes. Each statement reads the names that its SQL holds: the publication, the table,
+			// the columns of its list and the schema. Postgres refuses a type change of a column that a column list
+			// names, so a listed column also reads the `type` property of the column. Postgres also refuses a schema
+			// in a publication that has a table with a column list, and the reverse: a table with a list shares the
+			// `publist` node and reads `pubschemas`, and a schema does the opposite. Two tables with lists, or two
+			// schemas, still commute.
+			case 'create_publication': {
+				const name = s.publication.name;
+				const withList = s.tables.some((t) => t.columns.length > 0);
+				return {
+					writes: [
+						...created('pub', name),
+						...s.tables.flatMap((t) => created('pubtbl', name, t.schema, t.table)),
+						...s.schemas.flatMap((it) => created('pubsch', name, it.schema)),
+					],
+					reads: [
+						...s.tables.flatMap((t) => [...underTable(t.schema, t.table), ...listedColumns(t)]),
+						...s.schemas.map((it) => nref('sch', it.schema)),
+					],
+					sharedWrites: [
+						...(withList ? [exist('publist', name)] : []),
+						...(s.schemas.length > 0 ? [exist('pubschemas', name)] : []),
+					],
+				};
+			}
+			case 'drop_publication':
+				return { writes: created('pub', s.publication.name) };
+			case 'alter_publication':
+				return { writes: altered('pub', s.publication.name), reads: [nref('pub', s.publication.name)] };
+			case 'add_publication_table': {
+				const withList = s.table.columns.length > 0;
+				return {
+					writes: created('pubtbl', s.table.name, s.table.schema, s.table.table),
+					reads: [
+						nref('pub', s.table.name),
+						...underTable(s.table.schema, s.table.table),
+						...listedColumns(s.table),
+						...(withList ? [exist('pubschemas', s.table.name)] : []),
+					],
+					...(withList && { sharedWrites: [exist('publist', s.table.name)] }),
+				};
+			}
+			case 'drop_publication_table':
+				return {
+					writes: created('pubtbl', s.table.name, s.table.schema, s.table.table),
+					reads: [nref('pub', s.table.name), ...underTable(s.table.schema, s.table.table)],
+				};
+			case 'add_publication_schema':
+				return {
+					writes: created('pubsch', s.schema.name, s.schema.schema),
+					reads: [nref('pub', s.schema.name), nref('sch', s.schema.schema), exist('publist', s.schema.name)],
+					sharedWrites: [exist('pubschemas', s.schema.name)],
+				};
+			case 'drop_publication_schema':
+				return {
+					writes: created('pubsch', s.schema.name, s.schema.schema),
+					reads: [nref('pub', s.schema.name), nref('sch', s.schema.schema)],
+				};
+
+			// ---- replica identity (an aspect of the table) ----
+			// With USING INDEX the SQL names the index. An index and the index of a unique constraint share the `rel`
+			// namespace, so a rename or a drop of either conflicts.
+			case 'alter_replica_identity':
+				return {
+					writes: altered('replid', s.schema, s.table),
+					reads: [...underTable(s.schema, s.table), ...(s.index === null ? [] : [name('rel', s.schema, s.index)])],
+				};
 
 			default: {
 				// Exhaustiveness guard: `statement` is `never` here only when every

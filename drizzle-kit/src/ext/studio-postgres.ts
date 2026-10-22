@@ -169,6 +169,11 @@ const fromInterims = ({
 		functions: [],
 		triggers: [],
 		extensions: [],
+		// Studio does not edit replica identities or publications
+		replicaIdentities: [],
+		publications: [],
+		publicationTables: [],
+		publicationSchemas: [],
 	};
 };
 

@@ -117,6 +117,10 @@ export const fromDatabase = async (
 			functions: [],
 			triggers: [],
 			extensions: [],
+			replicaIdentities: [],
+			publications: [],
+			publicationTables: [],
+			publicationSchemas: [],
 		} satisfies InterimSchema;
 	}
 
@@ -890,5 +894,9 @@ export const fromDatabase = async (
 		functions: [],
 		triggers: [],
 		extensions: [],
+		replicaIdentities: [],
+		publications: [],
+		publicationTables: [],
+		publicationSchemas: [],
 	} satisfies InterimSchema;
 };

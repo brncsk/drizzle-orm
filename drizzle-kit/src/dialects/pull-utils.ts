@@ -11,6 +11,8 @@ export type Table = { type: 'table'; schema: string | false; name: string };
 export type Role = { type: 'role'; name: string };
 /** A privilege is the schema's to manage when its grantee is: a role the roles filter accepts, or one the schema names. */
 export type Privilege = { type: 'privilege'; grantee: string };
+/** A publication is the schema's to manage on a push when the schema declares it; `pull` reads every one. */
+export type Publication = { type: 'publication'; name: string };
 
 /*
 	there's a double edge sword with having narrow list here
@@ -22,7 +24,7 @@ export type Privilege = { type: 'privilege'; grantee: string };
 	I will leave this as is and in introspect I will rely on introspected schemas and tables
 	to filter list of dependent entities, that'd probably be the go to
 */
-export type KitEntity = Schema | Table | Role | Privilege;
+export type KitEntity = Schema | Table | Role | Privilege | Publication;
 
 export type EntityFilter = (it: KitEntity) => boolean;
 
@@ -38,6 +40,8 @@ export const prepareEntityFilter = (
 	existingEntities: (Schema | Table)[],
 	/* the roles the drizzle schema names: declared with pgRole, or granted to with pgGrant */
 	declaredRoles: string[] = [],
+	/* the publications the drizzle schema declares, on a push; null accepts every publication, which is what `pull` reads */
+	declaredPublications: string[] | null = null,
 ): EntityFilter => {
 	const tablesConfig = typeof params.tables === 'undefined'
 		? []
@@ -82,6 +86,7 @@ export const prepareEntityFilter = (
 			if (it.grantee === 'PUBLIC') return declared.has('PUBLIC');
 			return declared.has(it.grantee) || rolesFilter({ type: 'role', name: it.grantee });
 		}
+		if (it.type === 'publication') return declaredPublications === null || declaredPublications.includes(it.name);
 
 		assertUnreachable(it);
 	};

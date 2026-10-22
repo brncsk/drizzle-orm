@@ -304,6 +304,9 @@ const baseObjects: Record<NeededObject, string[]> = {
 	],
 	trigger: sqlOf('create_trigger'),
 	extension: sqlOf('create_extension'),
+	publication: sqlOf('create_publication'),
+	publicationTable: sqlOf('add_publication_table').map((it) => it.replace(/ \("c1"\)/, '')),
+	publicationSchema: sqlOf('add_publication_schema'),
 };
 
 const unenforcedPolicy =
@@ -338,8 +341,20 @@ const fingerprint = async (): Promise<string> => {
 			UNION ALL
 			SELECT 'extension ' || extname FROM pg_extension WHERE extname NOT IN ('plpgsql', 'vector', 'pg_trgm')
 			UNION ALL
-			SELECT format('relation %s.%s kind=%s rls=%s acl=%s options=%s', ns.nspname, c.relname, c.relkind,
-				c.relrowsecurity, c.relacl, c.reloptions)
+			SELECT format('publication %s all=%s publish=%s,%s,%s,%s root=%s', pubname, puballtables, pubinsert, pubupdate,
+				pubdelete, pubtruncate, pubviaroot)
+			FROM pg_publication
+			UNION ALL
+			SELECT format('publication table %s %s.%s %s', p.pubname, n.nspname, c.relname, pr.prattrs)
+			FROM pg_publication_rel pr JOIN pg_publication p ON p.oid = pr.prpubid JOIN pg_class c ON c.oid = pr.prrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			UNION ALL
+			SELECT format('publication schema %s %s', p.pubname, n.nspname)
+			FROM pg_publication_namespace pn JOIN pg_publication p ON p.oid = pn.pnpubid
+			JOIN pg_namespace n ON n.oid = pn.pnnspid
+			UNION ALL
+			SELECT format('relation %s.%s kind=%s rls=%s acl=%s options=%s replident=%s', ns.nspname, c.relname, c.relkind,
+				c.relrowsecurity, c.relacl, c.reloptions, c.relreplident)
 			FROM pg_class c JOIN ns ON ns.oid = c.relnamespace
 			UNION ALL
 			SELECT format('column %s.%s.%s %s notnull=%s default=%s', ns.nspname, c.relname, a.attname,

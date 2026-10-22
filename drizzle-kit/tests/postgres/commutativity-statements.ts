@@ -133,7 +133,10 @@ export type NeededObject =
 	| 'function'
 	| 'triggerFunction'
 	| 'trigger'
-	| 'extension';
+	| 'extension'
+	| 'publication'
+	| 'publicationTable'
+	| 'publicationSchema';
 
 const onTable = ['schema', 'table'] as const;
 const onColumn = [...onTable, 'column'] as const;
@@ -212,6 +215,14 @@ export const rows = (prefix = ''): Record<string, Row> => {
 	};
 	// The ground-truth test needs an extension that PGlite can create, so the name without a prefix is `citext`.
 	const extension = { name: named('citext'), namespace: null, version: null, cascade: false };
+	const publication = {
+		name: named('pub'),
+		allTables: false,
+		publish: ['insert', 'update', 'delete', 'truncate'],
+		viaRoot: false,
+	};
+	const publicationTable = { name: publication.name, schema, table, columns: [] as string[] };
+	const publicationSchema = { name: publication.name, schema };
 
 	const createTable = (name: string, columns: Column[]) =>
 		({
@@ -720,6 +731,65 @@ export const rows = (prefix = ''): Record<string, Row> => {
 			family: 'extension',
 			needs: ['extension'],
 			statement: { type: 'drop_extension', extension } as any,
+		},
+
+		create_publication: {
+			family: 'publication',
+			needs: [],
+			isCreate: true,
+			statement: { type: 'create_publication', publication, tables: [], schemas: [] } as any,
+		},
+		'create_publication:table': {
+			family: 'publication',
+			needs: [...onColumn],
+			isCreate: true,
+			statement: {
+				type: 'create_publication',
+				publication,
+				tables: [{ ...publicationTable, columns: [column] }],
+				schemas: [],
+			} as any,
+		},
+		alter_publication: {
+			family: 'publication',
+			needs: ['publication'],
+			statement: {
+				type: 'alter_publication',
+				publication: { ...publication, publish: ['insert'] },
+				from: publication,
+			} as any,
+		},
+		drop_publication: {
+			family: 'publication',
+			needs: ['publication'],
+			statement: { type: 'drop_publication', publication } as any,
+		},
+		add_publication_table: {
+			family: 'publication',
+			needs: [...onColumn, 'publication'],
+			isCreate: true,
+			statement: { type: 'add_publication_table', table: { ...publicationTable, columns: [column] } } as any,
+		},
+		drop_publication_table: {
+			family: 'publication',
+			needs: [...onTable, 'publication', 'publicationTable'],
+			statement: { type: 'drop_publication_table', table: publicationTable } as any,
+		},
+		add_publication_schema: {
+			family: 'publication',
+			needs: ['schema', 'publication'],
+			isCreate: true,
+			statement: { type: 'add_publication_schema', schema: publicationSchema } as any,
+		},
+		drop_publication_schema: {
+			family: 'publication',
+			needs: ['schema', 'publication', 'publicationSchema'],
+			statement: { type: 'drop_publication_schema', schema: publicationSchema } as any,
+		},
+		alter_replica_identity: {
+			family: 'table',
+			needs: [...onTable],
+			statement: { type: 'alter_replica_identity', schema, table, identity: 'full', index: null } as any,
 		},
 
 		create_policy: {
