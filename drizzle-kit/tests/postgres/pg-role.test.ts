@@ -326,3 +326,14 @@ test.each([
 	expect(st).toStrictEqual(sql);
 	expect(pst).toStrictEqual(sql);
 });
+
+test("the cluster roles and the session role are never the schema's: a push that manages every role leaves them", async (t) => {
+	// PGlite's session role is `postgres`; the `pg_*` roles come with the cluster
+	await db.query(`CREATE ROLE "operator"`);
+	const { sqlStatements: pst } = await push({ db, to: { manager: pgRole('manager') }, entities: { roles: true } });
+	// A role is dropped after the policy statements, so the drop comes after the create.
+	expect(pst).toStrictEqual([
+		'CREATE ROLE "manager";',
+		'DROP ROLE "operator";',
+	]);
+});

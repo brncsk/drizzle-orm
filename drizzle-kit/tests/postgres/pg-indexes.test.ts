@@ -876,3 +876,26 @@ test('an index that keeps its name and moves to another table is dropped and cre
 	expect(st).toStrictEqual(st0);
 	expect(pst).toStrictEqual(st0);
 });
+
+test('an index option a declaration quotes is the option the database stores unquoted', async (t) => {
+	// `reloptions` holds `search_tokenizer=unicode_words(...)`; the declaration must quote it for `CREATE INDEX`
+	const schema = {
+		users: pgTable(
+			'users',
+			{
+				id: serial('id').primaryKey(),
+				name: text('name'),
+			},
+			(t) => [
+				index('users_name_idx').on(t.name).with({ fillfactor: 70, deduplicate_items: "'off'" }),
+			],
+		),
+	};
+	const { sqlStatements: created } = await push({ db, to: schema });
+	expect(created).toStrictEqual([
+		'CREATE TABLE "users" (\n\t"id" serial PRIMARY KEY,\n\t"name" text\n);\n',
+		`CREATE INDEX "users_name_idx" ON "users" ("name") WITH (fillfactor=70, deduplicate_items='off');`,
+	]);
+	const { sqlStatements: again } = await push({ db, to: schema });
+	expect(again).toStrictEqual([]);
+});

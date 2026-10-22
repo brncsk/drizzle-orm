@@ -398,6 +398,7 @@ export const fromDatabase = async (
 		throw error;
 	});
 
+	// the role the session logged in as is the migrator's, never the schema's: it cannot be dropped, and a pull does not declare it
 	const rolesQuery = db.query<
 		{
 			rolname: string;
@@ -424,6 +425,7 @@ export const fromDatabase = async (
 			rolvaliduntil::text,
 			rolbypassrls
 		FROM pg_catalog.pg_roles
+		WHERE rolname OPERATOR(pg_catalog.<>) session_user::text
 		ORDER BY pg_catalog.lower(rolname);`,
 	).then((rows) => {
 		queryCallback('roles', rows, null);
