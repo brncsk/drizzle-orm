@@ -1,4 +1,4 @@
-import { integer, pgPolicy, pgRole, pgTable } from 'drizzle-orm/pg-core';
+import { integer, pgGrant, pgPolicy, pgRole, pgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import { diff, drizzleToDDL, prepareTestDatabase, push, TestDatabase } from '../postgres/mocks';
 
@@ -255,8 +255,8 @@ test('a role rename changes no policy and no privilege that names the role', asy
 		]);
 		return { role, users };
 	};
-	// Builds the state of `schema` with a SELECT privilege for the role. The test adds the privilege row itself
-	// because a drizzle schema cannot declare a privilege.
+	// Builds the state of `schema` with a SELECT privilege for the role. The test adds the privilege row itself,
+	// with a grantor, which a privilege that `pgGrant` declares does not have.
 	const state = (roleName: string) => {
 		const { ddl } = drizzleToDDL(schema(roleName));
 		ddl.privileges.push({
@@ -280,8 +280,12 @@ test('a role rename changes no policy and no privilege that names the role', asy
 	expect(sqlStatements).toStrictEqual(['ALTER ROLE "staff" RENAME TO "admin";']);
 
 	for (const it of sqlStatements) await db.query(it);
+	// The roles filter includes `admin`, so push manages the privileges of `admin`, and the schema declares the
+	// one that `admin` holds.
 	const entities = { roles: { include: ['admin'] } };
-	expect((await push({ db, to: schema('admin'), entities })).sqlStatements).toStrictEqual([]);
+	const target = schema('admin');
+	const grant = pgGrant({ on: target.users, to: target.role, privileges: ['select'] });
+	expect((await push({ db, to: { ...target, grant }, entities })).sqlStatements).toStrictEqual([]);
 	expect(await db.query(`select has_table_privilege('admin', 'users', 'SELECT') as granted`)).toStrictEqual([
 		{ granted: true },
 	]);

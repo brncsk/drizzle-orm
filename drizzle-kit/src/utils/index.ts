@@ -102,8 +102,8 @@ export function unescapeSingleQuotes(str: string, ignoreFirstAndLastChar: boolea
 
 export const prepareMigrationRenames = (
 	renames: {
-		from: { schema?: string; table?: string; name: string };
-		to: { schema?: string; table?: string; name: string };
+		from: { schema?: string; table?: string | null; name: string };
+		to: { schema?: string; table?: string | null; name: string };
 	}[],
 ) => {
 	return renames.map((it) => {

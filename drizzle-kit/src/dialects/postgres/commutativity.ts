@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { type Footprint, FootprintCommutativity, type ParsedSnapshotInput } from '../../commutativity/engine';
 import type { ConflictTarget } from '../../commutativity/types';
-import { type Column, type Index, type IndexColumn, privilegeTypes } from './ddl';
+import { type Column, type Index, type IndexColumn, schemaPrivilegeTypes, tablePrivilegeTypes } from './ddl';
 import { builtinPolicyRoles, isSerialType } from './grammar';
 import type { PostgresSnapshot } from './snapshot';
 import type { JsonStatement } from './statements';
@@ -119,7 +119,10 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 		case 'grant_privilege':
 		case 'revoke_privilege':
 		case 'regrant_privilege':
-			return ['table', statement.privilege.schema || '', statement.privilege.table || ''];
+			// A privilege with no table is held on its schema.
+			return statement.privilege.table === null
+				? ['schema', statement.privilege.schema]
+				: ['table', statement.privilege.schema, statement.privilege.table];
 	}
 }
 
@@ -751,18 +754,24 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'revoke_privilege':
 			case 'regrant_privilege': {
 				const { schema, table, grantee, grantor } = s.privilege;
-				// ALL holds every other privilege type, so the statement writes the node of each type.
-				const types = s.privilege.type === 'ALL' ? privilegeTypes : [s.privilege.type];
+				// ALL holds every privilege type of the object, so the statement writes the node of each type, plus
+				// the node of ALL itself. A privilege on a schema has the types of a schema.
+				const types = s.privilege.type !== 'ALL'
+					? [s.privilege.type]
+					: ['ALL', ...(table === null ? schemaPrivilegeTypes : tablePrivilegeTypes)];
 				return {
-					writes: types.flatMap((type) => altered('priv', schema || '', table || '', grantee, type)),
+					// A privilege on a schema has no table, so its node has an empty table part.
+					writes: types.flatMap((type) => altered('priv', schema, table ?? '', grantee, type)),
 					reads: [
-						...(table ? underTable(schema || 'public', table) : []),
+						// The SQL names the object. A privilege on a relation reads the name of the relation in the
+						// shared `rel` namespace too, so a rename or a drop of a view (not only of a table) conflicts.
+						...(table === null ? [nref('sch', schema)] : [...underTable(schema, table), name('rel', schema, table)]),
 						nref('role', grantee),
-						// The SQL does not name `grantor`: GRANT omits GRANTED BY, so the current user grants, and REVOKE
-						// never names it. But the DDL key of a privilege holds `grantor`, and the `roles` edge renames it.
+						// GRANT names `grantor` only in GRANTED BY, for a grantor that is not the owner, and REVOKE never
+						// names it. But the DDL key of a privilege holds `grantor`, and the `roles` edge renames it.
 						// If another branch renames that role first, the create delta of GRANT keeps the old name, and
 						// reconstruct finds no privilege under the key of the drop delta of REVOKE and skips the delta.
-						nref('role', grantor),
+						...(grantor === null ? [] : [nref('role', grantor)]),
 					],
 				};
 			}

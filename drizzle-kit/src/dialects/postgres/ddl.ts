@@ -3,8 +3,8 @@ import type { Alter } from '../dialect';
 import { create } from '../dialect';
 import { defaultNameForPK, defaultNameForUnique } from './grammar';
 
-export const privilegeTypes = [
-	'ALL',
+/** The privilege types of a table, a view and a materialized view. */
+export const tablePrivilegeTypes = [
 	'SELECT',
 	'INSERT',
 	'UPDATE',
@@ -13,6 +13,12 @@ export const privilegeTypes = [
 	'REFERENCES',
 	'TRIGGER',
 ] as const;
+
+/** The privilege types of a schema. */
+export const schemaPrivilegeTypes = ['USAGE', 'CREATE'] as const;
+
+/** Every privilege type. `ALL` holds every type of the object that the privilege is on. */
+export const privilegeTypes = ['ALL', ...tablePrivilegeTypes, ...schemaPrivilegeTypes] as const;
 
 export const createDDL = () => {
 	return create({
@@ -126,11 +132,20 @@ export const createDDL = () => {
 			password: 'string?',
 			validUntil: 'string?',
 		},
+		/*
+			A privilege is held on a table, a view or a materialized view (`table`
+			names the relation) or, with `table` null, on a schema. `grantor` is
+			null for a privilege the schema declares and for one the object's
+			owner granted. It names the role only when another role granted it,
+			so a declared privilege and the one Postgres reports back for it
+			compare equal. A privilege has no name: its identity says who holds
+			what on which object.
+		*/
 		privileges: {
-			grantor: 'string',
+			grantor: 'string?',
 			grantee: 'string',
 			schema: 'string',
-			table: 'string',
+			table: 'string?',
 			type: privilegeTypes,
 			isGrantable: 'boolean',
 		},
@@ -226,10 +241,14 @@ export const createDDL = () => {
 				{ to: 'tables', map: { schema: 'schema', name: 'table' } },
 				{ to: 'roles', cascade: false, map: { name: { list: 'roles' } } },
 			],
+			// A privilege on a relation follows its table or view, and a privilege on a schema (no table) follows the
+			// schema. A drop of the object drops the privilege with it.
 			privileges: [
-				{ to: 'tables', map: { schema: 'schema', name: 'table' } },
+				{ to: 'tables', when: (r) => r.table !== null, map: { schema: 'schema', name: 'table' } },
+				{ to: 'views', when: (r) => r.table !== null, map: { schema: 'schema', name: 'table' } },
+				{ to: 'schemas', when: (r) => r.table === null, map: { name: 'schema' } },
 				{ to: 'roles', cascade: false, map: { name: 'grantee' } },
-				{ to: 'roles', cascade: false, map: { name: 'grantor' } },
+				{ to: 'roles', cascade: false, when: (r) => r.grantor !== null, map: { name: 'grantor' } },
 			],
 			columns: [
 				{ to: 'tables', map: { schema: 'schema', name: 'table' } },

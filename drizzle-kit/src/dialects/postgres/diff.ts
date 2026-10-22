@@ -19,6 +19,7 @@ import type {
 	PostgresDDL,
 	PostgresEntities,
 	PrimaryKey,
+	Privilege,
 	Role,
 	Schema,
 	Sequence,
@@ -163,11 +164,6 @@ export const ddlDiff = async (
 	for (const rename of orMovedTables) {
 		applyRename(rename.from, { name: rename.to.name, schema: rename.to.schema });
 	}
-
-	// after table renames
-	const privilegesDiff = diff(ddl1, ddl2, 'privileges');
-	const createdPrivileges = privilegesDiff.filter((it) => it.$diffType === 'create');
-	const deletedPrivileges = privilegesDiff.filter((it) => it.$diffType === 'drop');
 
 	const columnsDiff = diff(ddl1, ddl2, 'columns');
 	const columnRenames = [] as { from: Column; to: Column }[];
@@ -346,6 +342,12 @@ export const ddlDiff = async (
 	for (const it of renamedOrMovedViews) {
 		applyRename(it.from, { name: it.to.name, schema: it.to.schema });
 	}
+
+	// After the renames of schemas, tables and views, so that a privilege follows a renamed object and is not
+	// revoked and granted again.
+	const privilegesDiff = diff(ddl1, ddl2, 'privileges');
+	const createdPrivileges = privilegesDiff.filter((it) => it.$diffType === 'create');
+	const deletedPrivileges = privilegesDiff.filter((it) => it.$diffType === 'drop');
 
 	// Copies the role order of `ddl1` into a policy of `ddl2` that has the same roles in another order. The
 	// order has no meaning in SQL, and a role rename can change it. Without the copy, the snapshot would store
@@ -853,7 +855,15 @@ export const ddlDiff = async (
 	);
 
 	const jsonGrantPrivileges = createdPrivileges.map((it) => prepareStatement('grant_privilege', { privilege: it }));
-	const jsonRevokePrivileges = deletedPrivileges.map((it) => prepareStatement('revoke_privilege', { privilege: it }));
+	// a privilege on an object that is dropped goes with the object
+	const jsonRevokePrivileges = deletedPrivileges
+		.filter((it) =>
+			it.table === null
+				? it.schema === 'public' || ddl2.schemas.one({ name: it.schema })
+				: ddl2.tables.one({ schema: it.schema, name: it.table })
+					|| ddl2.views.one({ schema: it.schema, name: it.table })
+		)
+		.map((it) => prepareStatement('revoke_privilege', { privilege: it }));
 	const jsonAlterPrivileges = alters.filter((it) => it.entityType === 'privileges').map((it) =>
 		prepareStatement('regrant_privilege', { privilege: it.$right, diff: it })
 	);
@@ -932,7 +942,8 @@ export const ddlDiff = async (
 		then stay as they are. Otherwise the view is dropped and created
 		again, and so is every view that selects from it, since Postgres
 		refuses to drop a view another one depends on: the dependents are
-		dropped first and created last, in dependency order.
+		dropped first and created last, in dependency order, and the
+		privileges they lost with the drop are granted again.
 	*/
 	const viewsToRecreate: { from: View; to: View }[] = [];
 
@@ -1007,6 +1018,16 @@ export const ddlDiff = async (
 			return prepareStatement('drop_view', { view: left, cause: from });
 		});
 	createViews.push(...viewsToRecreate.map((r) => prepareStatement('create_view', { view: r.to })));
+
+	// DROP VIEW took the privileges on the view with it. A new privilege on the view is in
+	// `jsonGrantPrivileges` already, so it is not granted twice.
+	const isCreatedPrivilege = (it: Privilege) =>
+		createdPrivileges.some((c) => ddl2.key('privileges', c) === ddl2.key('privileges', it));
+	const jsonRegrantRecreatedViews = viewsToRecreate.flatMap((r) =>
+		ddl2.privileges.list({ schema: r.to.schema, table: r.to.name }).filter((it) => !isCreatedPrivilege(it)).map((
+			privilege,
+		) => prepareStatement('grant_privilege', { privilege }))
+	);
 
 	const columnsToRecreate = columnAlters.filter((it) => it.generated && it.generated.to !== null).filter((it) => {
 		// if push and definition changed
@@ -1090,8 +1111,6 @@ export const ddlDiff = async (
 	jsonStatements.push(...jsonAlterRoles);
 
 	jsonStatements.push(...jsonRevokePrivileges);
-	jsonStatements.push(...jsonGrantPrivileges);
-	jsonStatements.push(...jsonAlterPrivileges);
 
 	jsonStatements.push(...createTables);
 
@@ -1166,6 +1185,11 @@ export const ddlDiff = async (
 		? sortCreateViews(viewsToWrite, $metadata.viewDependencies)
 		: sortViewsByDependency(viewsToWrite, (node, other) => existsInViewDef(other.view, node.view));
 	jsonStatements.push(...sortedViews);
+
+	// a privilege is granted once what it is granted on exists
+	jsonStatements.push(...jsonGrantPrivileges);
+	jsonStatements.push(...jsonAlterPrivileges);
+	jsonStatements.push(...jsonRegrantRecreatedViews);
 
 	jsonStatements.push(...jsonRenamePoliciesStatements);
 	jsonStatements.push(...jsonCreatePoliciesStatements);

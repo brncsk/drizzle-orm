@@ -125,7 +125,7 @@ export const pushSchema = async (
 	const { fromDatabaseForDrizzle } = await import('src/dialects/postgres/introspect');
 	const { fromDrizzleSchema, fromExports } = await import('../dialects/postgres/drizzle');
 	const { suggestions } = await import('../cli/commands/push-postgres');
-	const { extractPostgresExisting } = await import('../dialects/drizzle');
+	const { declaredRoles, extractPostgresExisting } = await import('../dialects/drizzle');
 	const { ddlDiff } = await import('../dialects/postgres/diff');
 	const { sql } = await import('drizzle-orm');
 
@@ -149,7 +149,8 @@ export const pushSchema = async (
 		entities: undefined,
 	} satisfies EntitiesFilterConfig;
 	const existing = extractPostgresExisting(prepared.schemas, prepared.views, prepared.matViews);
-	const filter = prepareEntityFilter('postgresql', filterConfig, existing);
+	// As in the CLI push, the privileges of the roles that the schema names are the schema's to manage.
+	const filter = prepareEntityFilter('postgresql', filterConfig, existing, declaredRoles(prepared));
 
 	const prev = await fromDatabaseForDrizzle(db, filter, () => {}, migrations);
 

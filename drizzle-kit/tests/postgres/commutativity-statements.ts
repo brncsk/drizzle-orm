@@ -83,9 +83,10 @@ export const check = (schema: string, table: string, name: string, value: string
 	({ schema, table, name, value }) as CheckConstraint;
 export const policy = (schema: string, table: string, name: string, roles = ['public']) =>
 	({ schema, table, name, as: 'PERMISSIVE', for: 'ALL', roles, using: null, withCheck: null }) as Policy;
+// A privilege with a null `table` is held on the schema.
 export const privilege = (
 	schema: string,
-	table: string,
+	table: string | null,
 	grantee: string,
 	type: Privilege['type'],
 	grantor = 'postgres',
@@ -706,6 +707,18 @@ export const rows = (prefix = ''): Record<string, Row> => {
 			needs: [...onTable, 'role'],
 			isCreate: true,
 			statement: { type: 'grant_privilege', privilege: privilege(schema, table, role, 'INSERT') },
+		},
+		'grant_privilege:schema': {
+			family: 'privilege',
+			needs: ['schema', 'role'],
+			isCreate: true,
+			statement: { type: 'grant_privilege', privilege: privilege(schema, null, role, 'USAGE') },
+		},
+		'grant_privilege:view': {
+			family: 'privilege',
+			needs: ['schema', 'view', 'role'],
+			isCreate: true,
+			statement: { type: 'grant_privilege', privilege: privilege(schema, view, role, 'SELECT') },
 		},
 		revoke_privilege: {
 			family: 'privilege',
