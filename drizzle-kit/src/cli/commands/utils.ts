@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { object, string } from 'zod';
+import type { SchemaTransform } from '../../dialects/common';
 import { assertUnreachable, type Journal } from '../../utils';
 import { type Dialect, dialect } from '../../utils/schemaValidator';
 import { prepareFilenames } from '../../utils/utils-node';
@@ -68,7 +69,7 @@ export const prepareCheckParams = async (
 		schema?: string;
 	},
 	from: 'cli' | 'config',
-): Promise<{ out: string; dialect: Dialect; schema?: string | string[] }> => {
+): Promise<{ out: string; dialect: Dialect; schema?: string | string[]; transforms?: SchemaTransform[] }> => {
 	const config = from === 'config'
 		? await drizzleConfigFromFile(options.config as string | undefined)
 		: options;
@@ -78,7 +79,14 @@ export const prepareCheckParams = async (
 			[error('Please provide required params:'), wrapParam('dialect', config.dialect)].join('\n'),
 		);
 	}
-	return { out: config.out || 'drizzle', dialect: config.dialect, ...(config.schema && { schema: config.schema }) };
+	// `check` loads the schema files as `generate` does, so it applies the same transforms.
+	const transforms = 'transform' in config ? (config.transform as SchemaTransform[] | undefined) ?? [] : [];
+	return {
+		out: config.out || 'drizzle',
+		dialect: config.dialect,
+		...(config.schema && { schema: config.schema }),
+		...(transforms.length > 0 && { transforms }),
+	};
 };
 
 export const prepareDropParams = async (
@@ -101,6 +109,8 @@ export type CheckConfig = {
 	out: string;
 	dialect: Dialect;
 	schema?: string | string[];
+	/** The transforms of the loaded schema files, from the config. See `SchemaTransform`. */
+	transforms?: SchemaTransform[];
 	ignoreConflicts: boolean | undefined;
 };
 
@@ -126,6 +136,8 @@ export type ExportConfig = {
 	dialect: Dialect;
 	sql: boolean;
 	filenames: string[];
+	/** The transforms of the loaded schema files, from the config. See `SchemaTransform`. */
+	transforms?: SchemaTransform[];
 	output: 'text' | 'json';
 };
 
@@ -152,6 +164,7 @@ export const prepareGenerateConfig = async (
 	const hints = await HintsHandler.fromCli(options);
 
 	const { schema, out, breakpoints, dialect, driver } = config;
+	const transforms = 'transform' in config ? (config.transform as SchemaTransform[] | undefined) ?? [] : [];
 
 	if (!schema || !dialect) {
 		throw new RequiredParamsCliError(
@@ -176,7 +189,7 @@ export const prepareGenerateConfig = async (
 		custom: options.custom || false,
 		breakpoints: breakpoints ?? true,
 		filenames: fileNames,
-		schemaSource: SchemaSource.fromFilenames(fileNames),
+		schemaSource: SchemaSource.fromFilenames(fileNames, transforms),
 		out: out || 'drizzle',
 		bundle: driver === 'expo' || driver === 'durable-sqlite',
 		driver,
@@ -215,10 +228,13 @@ export const prepareExportConfig = async (
 	}
 
 	const fileNames = prepareFilenames(schema);
+	// `export` loads the schema files as `generate` does, so it applies the same transforms.
+	const transforms = 'transform' in config ? (config.transform as SchemaTransform[] | undefined) ?? [] : [];
 	return {
 		dialect: dialect,
 		sql: sql,
 		filenames: fileNames,
+		...(transforms.length > 0 && { transforms }),
 	};
 };
 
@@ -289,6 +305,7 @@ export const preparePushConfig = async (
 			schema: string;
 		};
 		filenames: string[];
+		transforms: SchemaTransform[];
 	}
 > => {
 	const hints = await HintsHandler.fromCli({
@@ -320,6 +337,7 @@ export const preparePushConfig = async (
 
 	const schemaFiles = prepareFilenames(config.schema);
 	humanLog(chalk.gray(`Reading schema files:\n${schemaFiles.join('\n')}\n`));
+	const transforms = ('transform' in config ? config.transform as SchemaTransform[] | undefined : undefined) ?? [];
 
 	const filters = {
 		tables: config.tablesFilter,
@@ -342,6 +360,7 @@ export const preparePushConfig = async (
 				filters,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printIssuesPg(config);
@@ -361,6 +380,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printIssuesMysql(config);
@@ -380,6 +400,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printIssuesSingleStore(config);
@@ -398,6 +419,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printIssuesSqlite(config, 'push');
@@ -416,6 +438,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printIssuesLibSQL(config, 'push');
@@ -435,6 +458,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printMssqlIssues(config);
@@ -454,6 +478,7 @@ export const preparePushConfig = async (
 				hints,
 				migrations: config.migrations,
 				filenames: schemaFiles,
+				transforms,
 			};
 		}
 		printCockroachIssues(config);

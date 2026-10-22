@@ -146,7 +146,9 @@ export const handle = async (config: GenerateConfig<SchemaSource>) => {
 };
 
 export const handleExport = async (config: ExportConfig) => {
-	const { stage, ddl, metadata, errors, warnings } = stateOfSchema(await prepareFromSchemaFiles(config.filenames));
+	const { stage, ddl, metadata, errors, warnings } = stateOfSchema(
+		await prepareFromSchemaFiles(config.filenames, config.transforms ?? []),
+	);
 
 	if (!ddl || errors.length > 0) {
 		throw new CommandOutputCliError('export', errors.map((it) => postgresSchemaError(it)).join('\n'), {

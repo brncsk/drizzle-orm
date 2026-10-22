@@ -44,6 +44,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { assertUnreachable } from '../../utils';
 import { loadModule } from '../../utils/utils-node';
+import type { SchemaTransform } from '../common';
 import { findViewDependencies, granteeName } from '../drizzle';
 import type { EntityFilter } from '../pull-utils';
 import { entityKey, getOrNull } from '../utils';
@@ -1012,7 +1013,7 @@ export const fromExports = (exports: Record<string, unknown>) => {
 	};
 };
 
-export const prepareFromSchemaFiles = async (imports: string[]) => {
+export const prepareFromSchemaFiles = async (imports: string[], transforms: SchemaTransform[] = []) => {
 	const tables: AnyPgTable[] = [];
 	const enums: PgEnum<any>[] = [];
 	const schemas: PgSchema[] = [];
@@ -1030,7 +1031,17 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 	for (let i = 0; i < imports.length; i++) {
 		const it = imports[i];
 
-		const i0: Record<string, unknown> = await loadModule(it);
+		const i0: Record<string, unknown> = { ...(await loadModule(it)) };
+		for (const transform of transforms) {
+			// What a transform returns follows the file's own exports, in the
+			// order the transform returns it: a key that replaces an export
+			// takes the transform's place, not the export's, so the transform
+			// decides the order its objects are created in where it matters
+			// (a function after the ones its body calls).
+			const derived = await transform(i0, it);
+			for (const key of Object.keys(derived)) delete i0[key];
+			Object.assign(i0, derived);
+		}
 		const prepared = fromExports(i0);
 
 		tables.push(...prepared.tables);
@@ -1073,8 +1084,8 @@ export interface SchemaSource {
 }
 
 export const SchemaSource = {
-	fromFilenames(filenames: string[]): SchemaSource {
-		return { load: () => prepareFromSchemaFiles(filenames) };
+	fromFilenames(filenames: string[], transforms: SchemaTransform[] = []): SchemaSource {
+		return { load: () => prepareFromSchemaFiles(filenames, transforms) };
 	},
 	fromSchema(schema: PreparedPostgresSchema): SchemaSource {
 		return { load: async () => schema };
