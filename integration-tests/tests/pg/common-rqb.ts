@@ -1037,8 +1037,8 @@ export function tests(test: Test) {
 				expect(result).toStrictEqual(expectedResult);
 				expect(recordsQuery.toSQL()).toStrictEqual({
 					sql:
-						'select "d0"."id" as "id", ((select count(*) from "rqb_orders_18" where (("rqb_orders_18"."user_id" = "d0"."id") and (not ("rqb_orders_18"."status" in ($1, $2)))))) as "activeOrders", ((select count(*) from "rqb_orders_18")) as "allOrders" from "rqb_users_18" as "d0"',
-					params: ['CANCELED', 'CLOSED'],
+						'select "d0"."id" as "id", ((select count(*) from "rqb_orders_18" where (("rqb_orders_18"."user_id" = "d0"."id") and (not ("rqb_orders_18"."status" = any($1)))))) as "activeOrders", ((select count(*) from "rqb_orders_18")) as "allOrders" from "rqb_users_18" as "d0"',
+					params: ['{"CANCELED","CLOSED"}'],
 				});
 			},
 		);
@@ -1412,12 +1412,9 @@ export function tests(test: Test) {
 		}).toSQL();
 
 		expect(recordsQuery).toStrictEqual({
-			params: [
-				'CANCELED',
-				'CLOSED',
-			],
+			params: ['{"CANCELED","CLOSED"}'],
 			sql:
-				'select "d0"."id" as "id", "d0"."created_on" as "createdOn", "d0"."email" as "email", "d0"."first_name" as "firstName", "d0"."last_name" as "lastName", "d0"."phone" as "phone", "d0"."profile_link" as "profileLink", ((select count(*) from "job_candidacy" where (("job_candidacy"."candidate_id" = "candidates"."id") and (not ("job_candidacy"."status" in ($1, $2)))))) as "activeJobs" from "candidates" as "d0"',
+				'select "d0"."id" as "id", "d0"."created_on" as "createdOn", "d0"."email" as "email", "d0"."first_name" as "firstName", "d0"."last_name" as "lastName", "d0"."phone" as "phone", "d0"."profile_link" as "profileLink", ((select count(*) from "job_candidacy" where (("job_candidacy"."candidate_id" = "candidates"."id") and (not ("job_candidacy"."status" = any($1)))))) as "activeJobs" from "candidates" as "d0"',
 		});
 	});
 
