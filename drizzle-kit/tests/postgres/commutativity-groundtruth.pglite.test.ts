@@ -298,6 +298,12 @@ const baseObjects: Record<NeededObject, string[]> = {
 	policy: sqlOf('create_policy'),
 	role: sqlOf('create_role'),
 	privilege: sqlOf('grant_privilege'),
+	function: sqlOf('create_function'),
+	triggerFunction: [
+		`CREATE FUNCTION "s"."tf"() RETURNS trigger LANGUAGE plpgsql AS $fn$\nBEGIN RETURN NEW; END\n$fn$;`,
+	],
+	trigger: sqlOf('create_trigger'),
+	extension: sqlOf('create_extension'),
 };
 
 const unenforcedPolicy =
@@ -321,7 +327,16 @@ const fingerprint = async (): Promise<string> => {
 	const [{ facts }] = await db.query<{ facts: string }>(`
 		WITH ns AS (SELECT oid, nspname FROM pg_namespace WHERE nspname IN ('s', 's_new'))
 		SELECT coalesce(json_agg(fact ORDER BY fact), '[]')::text AS facts FROM (
-			SELECT 'schema ' || nspname FROM ns
+			SELECT format('schema %s acl=%s', nspname, nspacl) FROM pg_namespace WHERE nspname IN ('s', 's_new')
+			UNION ALL
+			SELECT format('function %s.%s(%s) %s %s comment=%s', ns.nspname, p.proname, pg_get_function_arguments(p.oid),
+				pg_get_function_result(p.oid), p.prosrc, obj_description(p.oid, 'pg_proc'))
+			FROM pg_proc p JOIN ns ON ns.oid = p.pronamespace
+			UNION ALL
+			SELECT 'trigger ' || pg_get_triggerdef(t.oid)
+			FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN ns ON ns.oid = c.relnamespace WHERE NOT t.tgisinternal
+			UNION ALL
+			SELECT 'extension ' || extname FROM pg_extension WHERE extname NOT IN ('plpgsql', 'vector', 'pg_trgm')
 			UNION ALL
 			SELECT format('relation %s.%s kind=%s rls=%s acl=%s options=%s', ns.nspname, c.relname, c.relkind,
 				c.relrowsecurity, c.relacl, c.reloptions)

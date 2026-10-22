@@ -129,7 +129,11 @@ export type NeededObject =
 	| 'view'
 	| 'policy'
 	| 'role'
-	| 'privilege';
+	| 'privilege'
+	| 'function'
+	| 'triggerFunction'
+	| 'trigger'
+	| 'extension';
 
 const onTable = ['schema', 'table'] as const;
 const onColumn = [...onTable, 'column'] as const;
@@ -176,6 +180,37 @@ export const rows = (prefix = ''): Record<string, Row> => {
 	const checkConstraint = check(schema, table, named('ck'), `"${column}" <> ''`);
 	const tablePolicy = policy(schema, table, named('pol'));
 	const select = privilege(schema, table, role, 'SELECT');
+	const sqlFunction = {
+		schema,
+		name: named('fn'),
+		args: [{ name: 'a', type: 'integer' }],
+		returns: 'integer',
+		language: 'sql',
+		body: 'SELECT $1',
+		attributes: null,
+		comment: null,
+	};
+	// The ground-truth test creates this function for the `triggerFunction` need, see `baseObjects` there.
+	const triggerFunction = {
+		...sqlFunction,
+		name: named('tf'),
+		args: [],
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NEW; END',
+	};
+	const trigger = {
+		schema,
+		table,
+		name: named('trg'),
+		when: 'BEFORE INSERT',
+		level: 'ROW',
+		functionSchema: schema,
+		functionName: triggerFunction.name,
+		comment: null,
+	};
+	// The ground-truth test needs an extension that PGlite can create, so the name without a prefix is `citext`.
+	const extension = { name: named('citext'), schema: null, version: null, cascade: false };
 
 	const createTable = (name: string, columns: Column[]) =>
 		({
@@ -618,6 +653,63 @@ export const rows = (prefix = ''): Record<string, Row> => {
 				toSchema: targetSchema,
 				view: { schema: targetSchema, name: view },
 			} as any,
+		},
+
+		create_function: {
+			family: 'function',
+			needs: ['schema'],
+			isCreate: true,
+			statement: { type: 'create_function', function: sqlFunction } as any,
+		},
+		replace_function: {
+			family: 'function',
+			needs: ['schema', 'function'],
+			statement: {
+				type: 'replace_function',
+				function: { ...sqlFunction, body: 'SELECT $1 + 0' },
+				from: sqlFunction,
+			} as any,
+		},
+		comment_function: {
+			family: 'function',
+			needs: ['schema', 'function'],
+			statement: { type: 'comment_function', function: { ...sqlFunction, comment: 'c' } } as any,
+		},
+		drop_function: {
+			family: 'function',
+			needs: ['schema', 'function'],
+			statement: { type: 'drop_function', function: sqlFunction, cause: null } as any,
+		},
+		create_trigger: {
+			family: 'trigger',
+			needs: [...onTable, 'triggerFunction'],
+			isCreate: true,
+			statement: { type: 'create_trigger', trigger, from: null } as any,
+		},
+		'create_trigger:replace': {
+			family: 'trigger',
+			needs: [...onTable, 'triggerFunction', 'trigger'],
+			statement: {
+				type: 'create_trigger',
+				trigger: { ...trigger, when: 'BEFORE INSERT OR UPDATE' },
+				from: trigger,
+			} as any,
+		},
+		drop_trigger: {
+			family: 'trigger',
+			needs: [...onTable, 'triggerFunction', 'trigger'],
+			statement: { type: 'drop_trigger', trigger } as any,
+		},
+		create_extension: {
+			family: 'extension',
+			needs: [],
+			isCreate: true,
+			statement: { type: 'create_extension', extension } as any,
+		},
+		drop_extension: {
+			family: 'extension',
+			needs: ['extension'],
+			statement: { type: 'drop_extension', extension } as any,
 		},
 
 		create_policy: {

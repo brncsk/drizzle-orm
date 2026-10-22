@@ -12,8 +12,15 @@ import { build, footprintsOfStatements, rows } from './commutativity-statements'
 
 const TYPES = Object.keys(rows());
 
-// cluster-level types (not under any schema)
-const ROLE_TYPES = new Set(['create_role', 'drop_role', 'rename_role', 'alter_role']);
+// cluster-level and database-level types (not under any schema): roles, and extensions in the default schema
+const ROLE_TYPES = new Set([
+	'create_role',
+	'drop_role',
+	'rename_role',
+	'alter_role',
+	'create_extension',
+	'drop_extension',
+]);
 // types whose target is the table itself or a child/aspect of the table
 const UNDER_TABLE = new Set([
 	'create_table',

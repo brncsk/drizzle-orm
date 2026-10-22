@@ -23,6 +23,8 @@ import {
 	PgDialect,
 	PgEnumColumn,
 	PgEnumObjectColumn,
+	PgExtension,
+	PgFunction,
 	PgGeography,
 	PgGeometry,
 	PgGeometryObject,
@@ -36,6 +38,7 @@ import {
 	PgRole,
 	PgSchema,
 	PgTable,
+	PgTrigger,
 	PgView,
 	uniqueKeyName,
 } from 'drizzle-orm/pg-core';
@@ -276,6 +279,10 @@ export const fromDrizzleSchema = (
 		matViews: PgMaterializedView[];
 		/** `pgGrant()` declarations. A caller that declares no grants can leave the list out. */
 		grants?: PgGrant[];
+		/** `pgFunction()`, `pgTrigger()` and `pgExtension()` declarations, which a caller can leave out too. */
+		functions?: PgFunction[];
+		triggers?: PgTrigger[];
+		extensions?: PgExtension[];
 	},
 	filter: EntityFilter,
 ): {
@@ -305,6 +312,9 @@ export const fromDrizzleSchema = (
 		tables: [],
 		viewColumns: [],
 		views: [],
+		functions: [],
+		triggers: [],
+		extensions: [],
 	};
 
 	res.schemas = schema.schemas
@@ -852,12 +862,67 @@ export const fromDrizzleSchema = (
 		};
 	});
 
+	for (const fn of schema.functions ?? []) {
+		const fnSchema = fn.schema ?? 'public';
+		if (!filter({ type: 'schema', name: fnSchema })) continue;
+		res.functions.push({
+			entityType: 'functions',
+			schema: fnSchema,
+			name: fn.name,
+			args: fn.args.map((it) => ({ name: it.name, type: it.type })),
+			returns: fn.returns,
+			language: fn.language,
+			body: is(fn.body, SQL) ? dialect.sqlToQuery(fn.body).sql : fn.body,
+			attributes: fn.attributes ?? null,
+			comment: fn.comment ?? null,
+		});
+	}
+
+	for (const trigger of schema.triggers ?? []) {
+		const target = is(trigger.on, PgTable)
+			? { schema: getTableConfig(trigger.on).schema ?? 'public', table: getTableName(trigger.on) }
+			: qualifiedName(trigger.on);
+		if (!filter({ type: 'table', schema: target.schema, name: target.table })) continue;
+		// A function given by name is `schema.name`, or `name` in `public`.
+		const fn = trigger.function;
+		const callee = is(fn, PgFunction)
+			? { schema: fn.schema ?? 'public', name: fn.name }
+			: (({ schema, table }) => ({ schema, name: table }))(qualifiedName(fn));
+		res.triggers.push({
+			entityType: 'triggers',
+			schema: target.schema,
+			table: target.table,
+			name: trigger.name,
+			when: trigger.when,
+			level: trigger.level,
+			functionSchema: callee.schema,
+			functionName: callee.name,
+			comment: trigger.comment ?? null,
+		});
+	}
+
+	for (const ext of schema.extensions ?? []) {
+		res.extensions.push({
+			entityType: 'extensions',
+			name: ext.name,
+			schema: ext.schema ?? null,
+			version: ext.version ?? null,
+			cascade: ext.cascade,
+		});
+	}
+
 	return {
 		schema: res,
 		metadata,
 		errors,
 		warnings,
 	};
+};
+
+/** `schema.table` or `table` as a name: the schema is `public` when the name has none. */
+const qualifiedName = (name: string): { schema: string; table: string } => {
+	const at = name.indexOf('.');
+	return at < 0 ? { schema: 'public', table: name } : { schema: name.slice(0, at), table: name.slice(at + 1) };
 };
 
 export const fromExports = (exports: Record<string, unknown>) => {
@@ -870,6 +935,9 @@ export const fromExports = (exports: Record<string, unknown>) => {
 	const views: PgView[] = [];
 	const matViews: PgMaterializedView[] = [];
 	const grants: PgGrant[] = [];
+	const functions: PgFunction[] = [];
+	const triggers: PgTrigger[] = [];
+	const extensions: PgExtension[] = [];
 	const relations: Relations[] = [];
 
 	const i0values = Object.values(exports);
@@ -910,6 +978,18 @@ export const fromExports = (exports: Record<string, unknown>) => {
 			grants.push(t);
 		}
 
+		if (is(t, PgFunction)) {
+			functions.push(t);
+		}
+
+		if (is(t, PgTrigger)) {
+			triggers.push(t);
+		}
+
+		if (is(t, PgExtension)) {
+			extensions.push(t);
+		}
+
 		if (is(t, Relations)) {
 			relations.push(t);
 		}
@@ -925,6 +1005,9 @@ export const fromExports = (exports: Record<string, unknown>) => {
 		roles,
 		policies,
 		grants,
+		functions,
+		triggers,
+		extensions,
 		relations,
 	};
 };
@@ -939,6 +1022,9 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 	const policies: PgPolicy[] = [];
 	const matViews: PgMaterializedView[] = [];
 	const grants: PgGrant[] = [];
+	const functions: PgFunction[] = [];
+	const triggers: PgTrigger[] = [];
+	const extensions: PgExtension[] = [];
 	const relations: Relations[] = [];
 
 	for (let i = 0; i < imports.length; i++) {
@@ -956,6 +1042,9 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 		roles.push(...prepared.roles);
 		policies.push(...prepared.policies);
 		grants.push(...prepared.grants);
+		functions.push(...prepared.functions);
+		triggers.push(...prepared.triggers);
+		extensions.push(...prepared.extensions);
 		relations.push(...prepared.relations);
 	}
 
@@ -969,6 +1058,9 @@ export const prepareFromSchemaFiles = async (imports: string[]) => {
 		roles,
 		policies,
 		grants,
+		functions,
+		triggers,
+		extensions,
 		relations,
 	};
 };

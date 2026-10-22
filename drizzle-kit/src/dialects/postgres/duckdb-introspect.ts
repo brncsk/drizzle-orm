@@ -114,6 +114,9 @@ export const fromDatabase = async (
 			policies,
 			views,
 			viewColumns,
+			functions: [],
+			triggers: [],
+			extensions: [],
 		} satisfies InterimSchema;
 	}
 
@@ -884,5 +887,8 @@ export const fromDatabase = async (
 		policies,
 		views,
 		viewColumns,
+		functions: [],
+		triggers: [],
+		extensions: [],
 	} satisfies InterimSchema;
 };

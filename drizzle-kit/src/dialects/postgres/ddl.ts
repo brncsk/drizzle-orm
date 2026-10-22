@@ -160,6 +160,51 @@ export const createDDL = () => {
 			withCheck: 'string?',
 		},
 		/*
+			A function is one name in one schema: no overloads, so a second
+			declaration of a name is a duplicate. `args` are the parameters in
+			order; the diff replaces a function in place when only its body, its
+			attributes or its comment changed, and drops and recreates it when
+			its signature (`args`, `returns`, `language`) changed.
+		*/
+		functions: {
+			schema: 'string',
+			name: 'string',
+			args: [
+				{
+					name: 'string',
+					type: 'string',
+				},
+			],
+			returns: 'string',
+			language: 'string',
+			body: 'string',
+			attributes: 'string?',
+			comment: 'string?',
+		},
+		/*
+			A trigger belongs to its table. `functionSchema` and `functionName`
+			name the function it calls. They are two fields, so that the edge to
+			the function follows a rename of the function's schema and the stored
+			row stays correct.
+		*/
+		triggers: {
+			schema: 'string',
+			table: 'string',
+			name: 'string',
+			when: 'string',
+			level: ['ROW', 'STATEMENT'],
+			functionSchema: 'string',
+			functionName: 'string',
+			comment: 'string?',
+		},
+		/* An extension is one by name in the database. `schema` is where its objects are installed, null for the default. */
+		extensions: {
+			name: 'string',
+			schema: 'string?',
+			version: 'string?',
+			cascade: 'boolean',
+		},
+		/*
 			`columns` is what the definition produces, as the declaration knows
 			it: the diff replaces a view in place (`CREATE OR REPLACE VIEW`) when
 			the new list keeps the old one as a prefix, which is the condition
@@ -228,12 +273,27 @@ export const createDDL = () => {
 			privileges: (r) => JSON.stringify([r.schema, r.table, r.grantor, r.grantee, r.type]),
 			policies: (r) => JSON.stringify([r.schema, r.table, r.name]),
 			views: (r) => JSON.stringify([r.schema, r.name]),
+			// A function is one name in its schema: the identity has no argument types, so there are no overloads.
+			functions: (r) => JSON.stringify([r.schema, r.name]),
+			triggers: (r) => JSON.stringify([r.schema, r.table, r.name]),
+			extensions: (r) => JSON.stringify([r.name]),
 		},
 		edges: {
 			tables: [{ to: 'schemas', map: { name: 'schema' } }],
 			enums: [{ to: 'schemas', map: { name: 'schema' } }],
 			sequences: [{ to: 'schemas', map: { name: 'schema' } }],
 			views: [{ to: 'schemas', map: { name: 'schema' } }],
+			functions: [{ to: 'schemas', map: { name: 'schema' } }],
+			// A trigger goes with its table. The function edge applies a rename of the function's schema to the
+			// trigger, and has `cascade: false`: a drop of the function does not drop the trigger row, because the
+			// diff drops the trigger before the function and creates it again when the schema still declares it.
+			triggers: [
+				{ to: 'tables', map: { schema: 'schema', name: 'table' } },
+				{ to: 'functions', cascade: false, map: { schema: 'functionSchema', name: 'functionName' } },
+			],
+			// An extension installed in a schema follows a rename of the schema. A drop of the schema keeps the
+			// row: the diff drops the extension on its own.
+			extensions: [{ to: 'schemas', cascade: false, when: (r) => r.schema !== null, map: { name: 'schema' } }],
 			checks: [{ to: 'tables', map: { schema: 'schema', name: 'table' } }],
 			// The `roles` edges of policies and privileges apply a role rename to the rows that name the role.
 			// They have `cascade: false`, so a drop of the role keeps these rows.
@@ -309,6 +369,10 @@ export type UniqueConstraint = PostgresEntities['uniques'];
 export type CheckConstraint = PostgresEntities['checks'];
 export type Policy = PostgresEntities['policies'];
 export type View = PostgresEntities['views'];
+export type Function = PostgresEntities['functions'];
+export type FunctionArg = Function['args'][number];
+export type Trigger = PostgresEntities['triggers'];
+export type Extension = PostgresEntities['extensions'];
 
 /** A column of a view as `pull` renders it; the view entity carries the subset the diff compares. */
 export type ViewColumn = {
@@ -365,6 +429,9 @@ export interface InterimSchema {
 	policies: Policy[];
 	views: View[];
 	viewColumns: ViewColumn[];
+	functions: Function[];
+	triggers: Trigger[];
+	extensions: Extension[];
 }
 
 export function postgresToRelationsPull(schema: PostgresDDL): SchemaForPull {
@@ -494,6 +561,24 @@ interface PrivilegeDuplicate {
 	name: string;
 }
 
+interface FunctionDuplicate {
+	type: 'function_duplicate';
+	schema: string;
+	name: string;
+}
+
+interface TriggerDuplicate {
+	type: 'trigger_duplicate';
+	schema: string;
+	table: string;
+	name: string;
+}
+
+interface ExtensionDuplicate {
+	type: 'extension_duplicate';
+	name: string;
+}
+
 interface EnumValuesDuplicate {
 	type: 'enum_values_duplicate';
 	schema: string;
@@ -514,7 +599,10 @@ export type SchemaError =
 	| PgVectorIndexNoOp
 	| RoleDuplicate
 	| PolicyDuplicate
-	| PrivilegeDuplicate;
+	| PrivilegeDuplicate
+	| FunctionDuplicate
+	| TriggerDuplicate
+	| ExtensionDuplicate;
 
 interface PolicyNotLinked {
 	type: 'policy_not_linked';
@@ -738,6 +826,27 @@ export const interimToDDL = (
 				schema: it.schema,
 				name: it.name,
 			});
+		}
+	}
+
+	for (const it of schema.extensions) {
+		const res = ddl.extensions.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'extension_duplicate', name: it.name });
+		}
+	}
+
+	for (const it of schema.functions) {
+		const res = ddl.functions.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'function_duplicate', schema: it.schema, name: it.name });
+		}
+	}
+
+	for (const it of schema.triggers) {
+		const res = ddl.triggers.push(it);
+		if (res.status === 'CONFLICT') {
+			errors.push({ type: 'trigger_duplicate', schema: it.schema, table: it.table, name: it.name });
 		}
 	}
 

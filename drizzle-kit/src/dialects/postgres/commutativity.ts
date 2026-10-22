@@ -116,6 +116,18 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 		case 'rename_role':
 			return ['role', statement.from.name];
 
+		case 'create_function':
+		case 'replace_function':
+		case 'drop_function':
+		case 'comment_function':
+			return ['function', statement.function.schema, statement.function.name];
+		case 'create_trigger':
+		case 'drop_trigger':
+			return ['trigger', statement.trigger.schema, statement.trigger.table, statement.trigger.name];
+		case 'create_extension':
+		case 'drop_extension':
+			return ['extension', statement.extension.name];
+
 		case 'grant_privilege':
 		case 'revoke_privilege':
 		case 'regrant_privilege':
@@ -172,6 +184,10 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 		'drop_role',
 		'alter_role',
 		'rename_role',
+		'create_function',
+		'replace_function',
+		'drop_function',
+		'comment_function',
 	]);
 
 	protected override describe(footprint: Footprint) {
@@ -181,7 +197,9 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 		let description = `${action} on ${target.name} table`;
 		if (target.kind === 'role') {
 			description = `${action}: ${target.name} role`;
-		} else if (target.kind === 'index' || target.kind === 'column') {
+		} else if (target.kind === 'extension') {
+			description = `${action}: ${target.name} extension`;
+		} else if (target.kind === 'index' || target.kind === 'column' || target.kind === 'trigger') {
 			description = `${action}: ${target.name} on ${target.table} table`;
 		} else if (target.kind === 'schema') {
 			description = `${action}: ${target.name} schema`;
@@ -235,6 +253,11 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'grant_privilege':
 			case 'revoke_privilege':
 			case 'regrant_privilege':
+			// CREATE OR REPLACE FUNCTION, COMMENT ON, CREATE OR REPLACE TRIGGER and CREATE EXTENSION IF NOT EXISTS
+			case 'replace_function':
+			case 'comment_function':
+			case 'create_trigger':
+			case 'create_extension':
 				return true;
 			default:
 				return false;
@@ -243,10 +266,17 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 
 	// Builds the footprint that a snapshot stores for a statement.
 	public buildFootprint(statement: JsonStatement, sql: string[]): Footprint {
+		const nodes = this.nodesOf(statement);
+		// A statement that creates or changes a view, an index or a column reads the name of each function that its
+		// SQL calls, so a drop or a signature change of the function on another branch conflicts with it.
+		const callees = 'callees' in statement ? statement.callees ?? [] : [];
+		if (callees.length > 0) {
+			nodes.reads = [...(nodes.reads ?? []), ...callees.map((fn) => `n|fn|${fn.schema}.${fn.name}`)];
+		}
 		return {
 			statementType: statement.type,
 			statementTarget: targetOf(statement),
-			...this.nodesOf(statement),
+			...nodes,
 			// 16 hex characters keep a snapshot short. Two different changes with one hash would pass `check` only
 			// when both are idempotent statements of one kind on the same nodes.
 			...(this.isIdempotent(statement) && {
@@ -775,6 +805,64 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 					],
 				};
 			}
+
+			// ---- functions (schema-scoped) ----
+			// A function is one name in its schema. A signature change is a drop and a create, so it writes the name
+			// that a caller reads (`callees` below).
+			case 'create_function':
+			case 'drop_function':
+				return {
+					writes: created('fn', s.function.schema, s.function.name),
+					reads: [nref('sch', s.function.schema)],
+				};
+			// CREATE OR REPLACE keeps the function and its signature. It writes the definition, and the comment when the
+			// comment changed too, so a replace and a comment on two branches commute. It reads the name of the function,
+			// which a drop or a signature change on another branch writes.
+			case 'replace_function': {
+				const fn = [s.function.schema, s.function.name] as const;
+				return {
+					writes: [
+						...altered('fnprop', ...fn, 'definition'),
+						...(s.function.comment !== s.from.comment ? altered('fnprop', ...fn, 'comment') : []),
+					],
+					reads: [nref('sch', fn[0]), nref('fn', ...fn)],
+				};
+			}
+			case 'comment_function':
+				return {
+					writes: altered('fnprop', s.function.schema, s.function.name, 'comment'),
+					reads: [nref('sch', s.function.schema), nref('fn', s.function.schema, s.function.name)],
+				};
+
+			// ---- triggers (children of the table) ----
+			// CREATE OR REPLACE TRIGGER names the table and the function. A new trigger writes its existence, and a
+			// changed one writes only itself and reads its name, which a drop on another branch writes.
+			case 'create_trigger': {
+				const t = s.trigger;
+				const key = [t.schema, t.table, t.name] as const;
+				return {
+					writes: s.from === null ? created('trg', ...key) : altered('trg', ...key),
+					reads: [
+						...underTable(t.schema, t.table),
+						nref('fn', t.functionSchema, t.functionName),
+						...(s.from === null ? [] : [nref('trg', ...key)]),
+					],
+				};
+			}
+			case 'drop_trigger':
+				return {
+					writes: created('trg', s.trigger.schema, s.trigger.table, s.trigger.name),
+					reads: underTable(s.trigger.schema, s.trigger.table),
+				};
+
+			// ---- extensions (database level) ----
+			case 'create_extension':
+				return {
+					writes: created('ext', s.extension.name),
+					reads: s.extension.schema === null ? [] : [nref('sch', s.extension.schema)],
+				};
+			case 'drop_extension':
+				return { writes: created('ext', s.extension.name) };
 
 			default: {
 				// Exhaustiveness guard: `statement` is `never` here only when every

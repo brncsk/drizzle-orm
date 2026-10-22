@@ -1253,6 +1253,9 @@ export const fromDatabase = async (
 		policies: resultPolicies,
 		views: resultViews,
 		viewColumns: resultViewColumns,
+		functions: [],
+		triggers: [],
+		extensions: [],
 	} satisfies InterimSchema;
 };
 
