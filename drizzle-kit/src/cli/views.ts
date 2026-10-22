@@ -359,6 +359,7 @@ export const psqlExplain = (st: StatementPostgres) => {
 		if (d.using) cause += `│ using: ${d.using.from} -> ${d.using.to}\n`;
 		if (d.withNoData) cause += `│ withNoData: ${d.withNoData.from} -> ${d.withNoData.to}\n`;
 		if (d.with) cause += `| with: ${formatOptionChanges(d.with.from, d.with.to)}`;
+		if (d.comment) cause += `│ comment: [${d.comment.from}] -> [${d.comment.to}]\n`;
 	}
 
 	if (st.type === 'drop_view' && st.cause) {
@@ -367,6 +368,15 @@ export const psqlExplain = (st: StatementPostgres) => {
 		const key = `${to.schema}.${to.name}`;
 		title += `${key} view changed:`;
 		cause += `│ definition: [${from.definition}] -> [${to.definition}]\n`;
+	}
+
+	if (st.type === 'replace_view') {
+		const { from, view: to } = st;
+
+		const key = `${to.schema}.${to.name}`;
+		title += `${key} view replaced:`;
+		cause += `│ definition: [${from.definition}] -> [${to.definition}]\n`;
+		if (from.comment !== to.comment) cause += `│ comment: [${from.comment}] -> [${to.comment}]\n`;
 	}
 
 	if (st.type === 'regrant_privilege') {

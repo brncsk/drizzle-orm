@@ -1,4 +1,4 @@
-import { createDDL, type Index } from '../../dialects/postgres/ddl';
+import { createDDL, type Index, type PostgresEntity } from '../../dialects/postgres/ddl';
 import {
 	defaultNameForIndex,
 	defaultNameForPK,
@@ -24,6 +24,20 @@ import { getOrNull } from '../../dialects/utils';
 // API passes this check too, because it holds the same two lists.
 export const isSnapshotV8 = (it: Record<string, any>): it is PostgresSnapshotV8 =>
 	Array.isArray(it.ddl) && Array.isArray(it.prevIds);
+
+/**
+ * Gives the rows of a format 8 state with the two view fields that a format 8 file does not have: `columns`,
+ * the columns that the definition produces, and `comment`. A view gets an empty column list, which the diff
+ * reads as not known: the first change to its definition drops and creates the view, and does not replace it
+ * in place. It gets no comment. A row that already has a field keeps it, so the function can run on any full
+ * state.
+ */
+export const withViewFields = (ddl: PostgresEntity[]): PostgresEntity[] =>
+	ddl.map((row) => {
+		if (row.entityType !== 'views') return row;
+		const view = row as Partial<typeof row> & typeof row;
+		return { ...row, columns: view.columns ?? [], comment: view.comment ?? null };
+	});
 
 export const upToV8 = (
 	it: Record<string, any>,
@@ -342,6 +356,8 @@ export const upToV8 = (
 				}
 				: null,
 			materialized: v.materialized,
+			columns: [],
+			comment: null,
 		});
 	}
 

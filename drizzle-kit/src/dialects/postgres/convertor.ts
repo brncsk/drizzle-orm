@@ -1,5 +1,6 @@
 import '../../@types/utils';
 import { escapeSingleQuotes, type Simplify, wrapWith } from '../../utils';
+import type { View } from './ddl';
 import { defaultNameForPK, defaults, defaultToSQL, isDefaultAction, isSerialType, mapSerialToInt } from './grammar';
 import type { JsonStatement } from './statements';
 
@@ -31,11 +32,27 @@ const renameSchemaConvertor = convertor('rename_schema', (st) => {
 	return `ALTER SCHEMA "${st.from.name}" RENAME TO "${st.to.name}";\n`;
 });
 
-const createViewConvertor = convertor('create_view', (st) => {
-	const { definition, name: viewName, schema, with: withOption, materialized, withNoData, tablespace, using } = st.view;
+const viewKey = (view: { schema: string; name: string }) =>
+	view.schema !== 'public' ? `"${view.schema}"."${view.name}"` : `"${view.name}"`;
 
-	const name = schema !== 'public' ? `"${schema}"."${viewName}"` : `"${viewName}"`;
-	let statement = materialized ? `CREATE MATERIALIZED VIEW ${name}` : `CREATE VIEW ${name}`;
+/** `COMMENT ON VIEW`; a null comment removes the one there is. */
+const viewCommentStatement = (
+	view: { schema: string; name: string; materialized: boolean; comment: string | null },
+) => {
+	const clause = view.materialized ? 'MATERIALIZED VIEW' : 'VIEW';
+	const text = view.comment === null ? 'NULL' : `'${escapeSingleQuotes(view.comment)}'`;
+	return `COMMENT ON ${clause} ${viewKey(view)} IS ${text};`;
+};
+
+const createViewStatement = (view: View, replace: boolean) => {
+	const { definition, with: withOption, materialized, withNoData, tablespace, using } = view;
+
+	const name = viewKey(view);
+	let statement = materialized
+		? `CREATE MATERIALIZED VIEW ${name}`
+		: replace
+		? `CREATE OR REPLACE VIEW ${name}`
+		: `CREATE VIEW ${name}`;
 	if (using) statement += ` USING "${using}"`;
 
 	const options: string[] = [];
@@ -55,12 +72,22 @@ const createViewConvertor = convertor('create_view', (st) => {
 	statement += `;`;
 
 	return statement;
+};
+
+const createViewConvertor = convertor('create_view', (st) => {
+	const statements = [createViewStatement(st.view, false)];
+	if (st.view.comment !== null) statements.push(viewCommentStatement(st.view));
+	return statements;
+});
+
+const replaceViewConvertor = convertor('replace_view', (st) => {
+	const statements = [createViewStatement(st.view, true)];
+	if (st.view.comment !== st.from.comment) statements.push(viewCommentStatement(st.view));
+	return statements;
 });
 
 const dropViewConvertor = convertor('drop_view', (st) => {
-	const { name: viewName, schema, materialized } = st.view;
-	const name = schema !== 'public' ? `"${schema}"."${viewName}"` : `"${viewName}"`;
-	return `DROP${materialized ? ' MATERIALIZED' : ''} VIEW ${name};`;
+	return `DROP${st.view.materialized ? ' MATERIALIZED' : ''} VIEW ${viewKey(st.view)};`;
 });
 
 const renameViewConvertor = convertor('rename_view', (st) => {
@@ -108,6 +135,8 @@ const alterViewConvertor = convertor('alter_view', (st) => {
 		const toUsing = diff.using.to ?? defaults.accessMethod;
 		statements.push(`ALTER ${viewClause} SET ACCESS METHOD "${toUsing}";`);
 	}
+
+	if (diff.comment) statements.push(viewCommentStatement(st.view));
 
 	return statements;
 });
@@ -1057,6 +1086,7 @@ const convertors = [
 	renameSchemaConvertor,
 	createViewConvertor,
 	dropViewConvertor,
+	replaceViewConvertor,
 	renameViewConvertor,
 	moveViewConvertor,
 	alterViewConvertor,

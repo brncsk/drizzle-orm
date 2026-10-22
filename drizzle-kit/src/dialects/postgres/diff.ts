@@ -26,7 +26,14 @@ import type {
 	View,
 } from './ddl';
 import { createDDL, tableFromDDL } from './ddl';
-import { defaults, defaultsCommutative, isSerialType, normalizePostgisType } from './grammar';
+import {
+	defaults,
+	defaultsCommutative,
+	existsInViewDef,
+	isSerialType,
+	normalizePostgisType,
+	viewColumnsReplaceable,
+} from './grammar';
 import type { JsonAlterPrimaryKey, JsonRecreateIndex, JsonStatement } from './statements';
 import { prepareStatement } from './statements';
 
@@ -861,6 +868,8 @@ export const ddlDiff = async (
 
 	const jsonDropViews = deletedViews.map((it) => prepareStatement('drop_view', { view: it, cause: null }));
 
+	const jsonReplaceViews: Extract<JsonStatement, { type: 'replace_view' }>[] = [];
+
 	// The rename runs first, so a view that also moves is renamed in its old schema.
 	const jsonRenameViews = renamedViews.map((it) =>
 		prepareStatement('rename_view', { from: it.from, to: { ...it.to, schema: it.from.schema } })
@@ -883,6 +892,13 @@ export const ddlDiff = async (
 			delete it.definition;
 		}
 
+		// the columns are what the definition produces: they decide how a
+		// changed definition is applied and are never a change of their own
+		// (a snapshot written before they were recorded has none)
+		if (!it.definition) {
+			delete it.columns;
+		}
+
 		// default access method
 		// from db -> heap,
 		// drizzle schema -> null
@@ -902,17 +918,26 @@ export const ddlDiff = async (
 
 	const viewsAlters = filteredViewAlters.map((it) => ({ diff: it, view: it.$right }));
 
-	const jsonAlterViews = viewsAlters.filter((it) => !it.diff.definition && !it.diff.materialized).map((it) => {
+	let jsonAlterViews = viewsAlters.filter((it) => !it.diff.definition && !it.diff.materialized).map((it) => {
 		return prepareStatement('alter_view', {
 			diff: it.diff,
 			view: it.view,
 		});
 	});
 
-	const jsonDropRecreatedViews: typeof jsonDropViews = [];
-	// recreate views
-	viewsAlters.filter((it) => it.diff.definition || it.diff.materialized).forEach((entry) => {
-		const it = entry.view;
+	/*
+		A changed definition is applied in place (`CREATE OR REPLACE VIEW`)
+		when the new columns keep the old ones as a prefix, which is what
+		Postgres accepts; the views that select from it and its privileges
+		then stay as they are. Otherwise the view is dropped and created
+		again, and so is every view that selects from it, since Postgres
+		refuses to drop a view another one depends on: the dependents are
+		dropped first and created last, in dependency order.
+	*/
+	const viewsToRecreate: { from: View; to: View }[] = [];
+
+	// The view in the old state, under its old schema and name.
+	const originalView = (it: View): View => {
 		const viewRename = renamedOrMovedViews.find((r) => r.to.schema === it.schema && r.to.name === it.name);
 		const viewSchema = viewRename ? viewRename.from.schema : it.schema;
 		const schemaRename = renamedSchemas.find((r) => r.to.name === viewSchema);
@@ -927,10 +952,61 @@ export const ddlDiff = async (
 				${schema}:${name}
 				`);
 		}
+		return from;
+	};
 
-		jsonDropRecreatedViews.push(prepareStatement('drop_view', { view: entry.diff.$left, cause: from }));
-		createViews.push(prepareStatement('create_view', { view: it }));
+	viewsAlters.filter((it) => it.diff.definition || it.diff.materialized).forEach((entry) => {
+		const it = entry.view;
+		const from = originalView(it);
+
+		const replaceable = !entry.diff.materialized && !it.materialized
+			&& viewColumnsReplaceable(from.columns, it.columns);
+
+		if (replaceable) {
+			jsonReplaceViews.push(prepareStatement('replace_view', { view: it, from }));
+			return;
+		}
+
+		viewsToRecreate.push({ from, to: it });
 	});
+
+	// the closure over the views that select from a recreated one
+	const isCreated = (it: View) => createdViews.some((c) => c.schema === it.schema && c.name === it.name);
+	for (let added = true; added;) {
+		added = false;
+		for (const candidate of ddl2.views.list()) {
+			if (isCreated(candidate)) continue;
+			if (viewsToRecreate.some((r) => r.to.schema === candidate.schema && r.to.name === candidate.name)) continue;
+			if (!viewsToRecreate.some((r) => existsInViewDef(r.to, candidate))) continue;
+
+			viewsToRecreate.push({ from: originalView(candidate), to: candidate });
+			added = true;
+		}
+	}
+
+	const recreated = (it: View) => viewsToRecreate.some((r) => r.to.schema === it.schema && r.to.name === it.name);
+	for (let i = jsonReplaceViews.length - 1; i >= 0; i--) {
+		if (recreated(jsonReplaceViews[i]!.view)) jsonReplaceViews.splice(i, 1);
+	}
+	jsonAlterViews = jsonAlterViews.filter((st) => !recreated(st.view));
+
+	// dropped in the reverse of the order they are created in: what the views
+	// select from now decides the order among views that were independent, and
+	// what they selected from before, which is what the database still holds
+	// when they are dropped, decides it where the two differ. The drops run
+	// after the renames and moves of views, so a drop names the view by the
+	// row of `ddl1`, which has the renames applied.
+	const byNewDefinition = sortViewsByDependency(viewsToRecreate, (node, other) => existsInViewDef(other.to, node.to));
+	const jsonDropRecreatedViews = sortViewsByDependency(
+		byNewDefinition,
+		(node, other) => existsInViewDef(other.from, node.from),
+	)
+		.reverse()
+		.map(({ from, to }) => {
+			const left = ddl1.views.one({ schema: to.schema, name: to.name }) ?? from;
+			return prepareStatement('drop_view', { view: left, cause: from });
+		});
+	createViews.push(...viewsToRecreate.map((r) => prepareStatement('create_view', { view: r.to })));
 
 	const columnsToRecreate = columnAlters.filter((it) => it.generated && it.generated.to !== null).filter((it) => {
 		// if push and definition changed
@@ -1079,9 +1155,17 @@ export const ddlDiff = async (
 
 	jsonStatements.push(...jsonAlterCheckConstraints);
 
-	// Topological sort
-	// dependent views must be created after their dependencies, otherwise the migration breaks
-	jsonStatements.push(...sortCreateViews(createViews, $metadata?.viewDependencies));
+	// Dependent views must be created after their dependencies, otherwise the migration breaks:
+	// https://github.com/drizzle-team/drizzle-orm/issues/4520 and https://github.com/drizzle-team/drizzle-orm/issues/6176
+	// A view is replaced after the tables and columns it selects from changed, and after a new view it now
+	// selects from, so the replaces are sorted together with the creates.
+	// The schema metadata gives the order when the new state comes from a drizzle schema. Without it (`push`
+	// from a database state, `up`), the order comes from the view names in the definition text.
+	const viewsToWrite = [...createViews, ...jsonReplaceViews];
+	const sortedViews = $metadata
+		? sortCreateViews(viewsToWrite, $metadata.viewDependencies)
+		: sortViewsByDependency(viewsToWrite, (node, other) => existsInViewDef(other.view, node.view));
+	jsonStatements.push(...sortedViews);
 
 	jsonStatements.push(...jsonRenamePoliciesStatements);
 	jsonStatements.push(...jsonCreatePoliciesStatements);
@@ -1103,4 +1187,30 @@ export const ddlDiff = async (
 		groupedStatements: groupedStatements,
 		deltas,
 	};
+};
+
+/**
+ * The items in an order that puts each one after the items it depends on;
+ * items that depend on nothing keep their order. Reversed, the order puts
+ * each item before the ones that depend on it. A view depends on another
+ * when the other's (schema-qualified) name appears in its definition, see
+ * `existsInViewDef`. A cycle, which Postgres would not have accepted, is
+ * broken where it is found.
+ */
+export const sortViewsByDependency = <T>(items: T[], dependsOn: (node: T, other: T) => boolean): T[] => {
+	const sorted: T[] = [];
+	const visited = new Set<T>();
+	const onStack = new Set<T>();
+	const visit = (node: T) => {
+		if (visited.has(node) || onStack.has(node)) return;
+		onStack.add(node);
+		for (const other of items) {
+			if (other !== node && dependsOn(node, other)) visit(other);
+		}
+		onStack.delete(node);
+		visited.add(node);
+		sorted.push(node);
+	};
+	for (const node of items) visit(node);
+	return sorted;
 };

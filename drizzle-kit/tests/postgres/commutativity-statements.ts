@@ -571,7 +571,10 @@ export const rows = (prefix = ''): Record<string, Row> => {
 			family: 'view',
 			needs: ['schema'],
 			isCreate: true,
-			statement: { type: 'create_view', view: { schema, name: view, definition: 'SELECT 1 AS "x"' } } as any,
+			statement: {
+				type: 'create_view',
+				view: { schema, name: view, definition: 'SELECT 1 AS "x"', columns: [], comment: null },
+			} as any,
 		},
 		drop_view: {
 			family: 'view',
@@ -585,6 +588,15 @@ export const rows = (prefix = ''): Record<string, Row> => {
 				type: 'rename_view',
 				from: { schema, name: view },
 				to: { schema, name: named('vw_new') },
+			} as any,
+		},
+		replace_view: {
+			family: 'view',
+			needs: ['schema', 'view'],
+			statement: {
+				type: 'replace_view',
+				view: { schema, name: view, definition: 'SELECT 2 AS "x"', columns: [], comment: null },
+				from: { schema, name: view, definition: 'SELECT 1 AS "x"', columns: [], comment: null },
 			} as any,
 		},
 		alter_view: {

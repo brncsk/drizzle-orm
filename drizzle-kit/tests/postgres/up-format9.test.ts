@@ -187,6 +187,32 @@ test('up keeps the primary key name that Postgres gave when a format 8 file stor
 	expect(await flow.check('main')).toStrictEqual({ status: 'passed' });
 });
 
+// A format 8 view has no `columns` and no `comment`. `up` gives it an empty column list, which the diff reads as
+// not known, and no comment.
+test('up gives a format 8 view an empty column list and no comment', async () => {
+	const schema = { entityType: 'schemas', name: 'public' };
+	const view = {
+		entityType: 'views',
+		schema: 'public',
+		name: 'v',
+		definition: 'SELECT 1 AS "x"',
+		with: null,
+		withNoData: null,
+		using: null,
+		tablespace: null,
+		materialized: false,
+	};
+	const folder = '20260101120001_main';
+	const flow = createFormat8Flow([{ folder, id: 'main', prevIds: [ORIGIN], ddl: [schema, view] }]);
+
+	await flow.up('main');
+
+	expect(flow.state('main', folder)).toStrictEqual(
+		normalizeDDL([schema, { ...view, columns: [], comment: null }] as Parameters<typeof normalizeDDL>[0]),
+	);
+	expect(await flow.check('main')).toStrictEqual({ status: 'passed' });
+});
+
 test('up writes nothing when a format 8 snapshot is malformed', async () => {
 	const { flow } = seedFormat8('format-8-linear');
 	const folder = '20260928145209_posts';

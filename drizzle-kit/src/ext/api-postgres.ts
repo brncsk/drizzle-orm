@@ -22,7 +22,7 @@ import type {
 } from '../dialects/postgres/ddl';
 import { fromEntities, interimToDDL } from '../dialects/postgres/ddl';
 import type { PostgresSchemaState } from '../dialects/postgres/snapshot';
-import { isSnapshotV8, upToV8 } from '../dialects/postgres/versions';
+import { isSnapshotV8, upToV8, withViewFields } from '../dialects/postgres/versions';
 import { originUUID } from '../utils';
 import type { DB } from '../utils';
 
@@ -271,7 +271,8 @@ export const up = (it: Record<string, any>): { snapshot: PostgresSchemaState; hi
 				+ 'or a full state of an older format.',
 		);
 	}
-	return { snapshot: schemaState(snapshot.id, snapshot.prevIds, snapshot.ddl), hints };
+	// A format 8 view has no `columns` and no `comment`; `withViewFields` gives it both.
+	return { snapshot: schemaState(snapshot.id, snapshot.prevIds, withViewFields(snapshot.ddl)), hints };
 };
 
 // Reconstructs the schema state of snapshot `id`, or of the only leaf when `id` is not given. `files` maps each

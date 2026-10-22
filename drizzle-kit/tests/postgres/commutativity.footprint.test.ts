@@ -165,7 +165,8 @@ const S = {
 		unique: unique(schema, table, name, cols),
 	}),
 	createEnum: (schema: string, name: string) => ({ type: 'create_enum', enum: { schema, name, values: ['a'] } }) as any,
-	createView: (schema: string, name: string) => ({ type: 'create_view', view: { schema, name } }) as any,
+	createView: (schema: string, name: string) =>
+		({ type: 'create_view', view: { schema, name, columns: [], comment: null } }) as any,
 	createSequence: (schema: string, name: string) => ({ type: 'create_sequence', sequence: { schema, name } }) as any,
 	renameRole: (from: string, to: string) => ({ type: 'rename_role', from: { name: from }, to: { name: to } }) as any,
 	dropRole: (name: string) => ({ type: 'drop_role', role: { name } }) as any,

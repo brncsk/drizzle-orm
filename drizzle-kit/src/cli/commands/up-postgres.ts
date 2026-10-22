@@ -10,7 +10,7 @@ import {
 	snapshotValidator,
 	stateDifference,
 } from '../../dialects/postgres/snapshot';
-import { isSnapshotV8, upToV8 } from '../../dialects/postgres/versions';
+import { isSnapshotV8, upToV8, withViewFields } from '../../dialects/postgres/versions';
 import { UnsupportedMergeError, upToV9, withStateKeyNames } from '../../dialects/postgres/versions-v9';
 import { originUUID } from '../../utils';
 import { assertSnapshotStatus, prepareOutFolder, validatorForDialect } from '../../utils/utils-node';
@@ -91,7 +91,12 @@ export const upPgHandler = async (out: string): Promise<string[]> => {
 	const converted: { path: string; text: string }[] = [];
 	if (sources.some((it) => it.status === 'nonLatest')) {
 		const files = sources.map(({ raw, ...it }) => {
-			const snapshot: PostgresSnapshotV8 | PostgresSnapshot = Number(raw.version) < 8 ? upToV8(raw).snapshot : raw;
+			// A format 8 view has no `columns` and no `comment`, so `withViewFields` gives it both before the conversion.
+			const snapshot: PostgresSnapshotV8 | PostgresSnapshot = Number(raw.version) < 8
+				? upToV8(raw).snapshot
+				: raw.version === '8' && isSnapshotV8(raw)
+				? { ...raw, ddl: withViewFields(raw.ddl) }
+				: raw;
 			return { ...it, snapshot };
 		}).sort((a, b) => (a.folder < b.folder ? -1 : 1));
 		// `validate` returns `nonLatest` for a format 8 file without a check of its shape, so `isSnapshotV8`

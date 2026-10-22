@@ -12,7 +12,7 @@ import {
 	timestamp,
 } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-import { diff, prepareTestDatabase, push, TestDatabase } from './mocks';
+import { diff, drizzleToDDL, prepareTestDatabase, push, TestDatabase } from './mocks';
 
 // @vitest-environment-options {"max-concurrency":1}
 let _: TestDatabase;
@@ -1477,9 +1477,9 @@ test('alter view ".as" value', async () => {
 		to,
 	});
 
+	// the columns are declared and unchanged, so the view is replaced in place
 	const st0: string[] = [
-		'DROP VIEW "some_view";',
-		`CREATE VIEW "some_view" WITH (check_option = local, security_barrier = true, security_invoker = true) AS (select * from users where id > 101);`,
+		`CREATE OR REPLACE VIEW "some_view" WITH (check_option = local, security_barrier = true, security_invoker = true) AS (select * from users where id > 101);`,
 	];
 	expect(st).toStrictEqual(st0);
 	expect(pst).toStrictEqual([]); // push ignored definition change
@@ -1992,11 +1992,11 @@ test('move view to a new schema and change its definition', async () => {
 
 	const { sqlStatements: st } = await diff(from, to, ['public.some_view->my_schema.some_view']);
 
+	// The new definition keeps the column list, so the view is replaced in place after the move.
 	expect(st).toStrictEqual([
 		'CREATE SCHEMA "my_schema";\n',
 		'ALTER VIEW "some_view" SET SCHEMA "my_schema";',
-		'DROP VIEW "my_schema"."some_view";',
-		'CREATE VIEW "my_schema"."some_view" AS (SELECT 2 AS "id" FROM "users");',
+		'CREATE OR REPLACE VIEW "my_schema"."some_view" AS (SELECT 2 AS "id" FROM "users");',
 	]);
 	await push({ db, to: from });
 	for (const statement of st) await db.query(statement);
@@ -2023,11 +2023,11 @@ test('a view that moves to another schema with a new name and a new definition w
 	// The test runs `st` itself because push does not compare the definition of a view.
 	for (const statement of st) await db.query(statement);
 
+	// The new definition keeps the column list, so the view is replaced in place after the rename and the move.
 	expect(st).toStrictEqual([
 		'ALTER VIEW "some_view" RENAME TO "new_view";',
 		'ALTER VIEW "new_view" SET SCHEMA "my_schema";',
-		'DROP VIEW "my_schema"."new_view";',
-		'CREATE VIEW "my_schema"."new_view" AS (SELECT 2 AS "id" FROM "users");',
+		'CREATE OR REPLACE VIEW "my_schema"."new_view" AS (SELECT 2 AS "id" FROM "users");',
 	]);
 	expect(await db.query('SELECT "id" FROM "my_schema"."new_view";')).toStrictEqual([{ id: 2 }]);
 	expect((await push({ db, to })).sqlStatements).toStrictEqual([]);
@@ -2075,10 +2075,10 @@ test('rename view and change its definition', async () => {
 
 	const { sqlStatements: st } = await diff(from, to, ['public.some_view->public.new_some_view']);
 
+	// The new definition keeps the column list, so the view is replaced in place after the rename.
 	expect(st).toStrictEqual([
 		'ALTER VIEW "some_view" RENAME TO "new_some_view";',
-		'DROP VIEW "new_some_view";',
-		'CREATE VIEW "new_some_view" AS (SELECT 2 AS "id" FROM "users");',
+		'CREATE OR REPLACE VIEW "new_some_view" AS (SELECT 2 AS "id" FROM "users");',
 	]);
 	await push({ db, to: from });
 	for (const statement of st) await db.query(statement);
@@ -2103,9 +2103,9 @@ test('push view with same name', async () => {
 	await push({ db, to: schema1 });
 	const { sqlStatements: pst } = await push({ db, to: schema2 });
 
+	// the selection is the same column, so the view is replaced in place
 	expect(st).toStrictEqual([
-		'DROP VIEW "view";',
-		'CREATE VIEW "view" AS (select distinct "id" from "test" where "test"."id" = 1);',
+		'CREATE OR REPLACE VIEW "view" AS (select distinct "id" from "test" where "test"."id" = 1);',
 	]);
 	expect(pst).toStrictEqual([]);
 });
@@ -2582,18 +2582,18 @@ test('topological sort test. existing view starts reading a new view', async () 
 	await push({ db, to: schema1 });
 	const { sqlStatements: pst1 } = await push({ db, to: schema2 });
 
+	// "v2" keeps its column list, so it is replaced in place, after the new view it selects from.
 	expect(st1).toStrictEqual([
-		'DROP VIEW "v2";',
 		'CREATE VIEW "v_new" AS (select "id" from "t");',
-		'CREATE VIEW "v2" AS (select "id" from "v_new");',
+		'CREATE OR REPLACE VIEW "v2" AS (select "id" from "v_new");',
 	]);
 	// push ignores definition changes
 	expect(pst1).toStrictEqual(['CREATE VIEW "v_new" AS (select "id" from "t");']);
 });
 
-// TODO enhancement: dependents of a recreated view are not recreated, DROP VIEW "v1" fails since "v2" depends on it
-// can not know right now the dependency tree of dropped views
-test.skipIf(Date.now() < +new Date('2026-11-24'))(
+// "v1" keeps its column list, so it is replaced in place and "v2", which selects from it, stays as it is.
+// A view that cannot be replaced is dropped and created together with its dependents, see the replace tests below.
+test(
 	'topological sort test. recreate view that another view depends on',
 	async () => {
 		const t = pgTable('t', { id: integer() });
@@ -2611,11 +2611,9 @@ test.skipIf(Date.now() < +new Date('2026-11-24'))(
 		const { sqlStatements: pst1 } = await push({ db, to: schema2 });
 
 		expect(st1).toStrictEqual([
-			'DROP VIEW "v2";',
-			'DROP VIEW "v1";',
-			'CREATE VIEW "v1" AS (select "id" from "t" where "t"."id" > 0);',
-			'CREATE VIEW "v2" AS (select "id" from "v1");',
+			'CREATE OR REPLACE VIEW "v1" AS (select "id" from "t" where "t"."id" > 0);',
 		]);
+		for (const statement of st1) await db.query(statement);
 		// push ignores definition changes
 		expect(pst1).toStrictEqual([]);
 	},
@@ -2662,4 +2660,193 @@ test('Issue No3309. tablesFilter with views', async () => {
 	];
 
 	expect(pst1).toStrictEqual(expectedSt1);
+});
+
+// replace in place, or drop and create: what CREATE OR REPLACE VIEW accepts
+test('replace: a column appended at the end keeps the view in place', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey(), name: text('name') });
+	const from = {
+		users,
+		view: pgView('v', { id: integer('id') }).as(sql`select id from users`),
+	};
+	const to = {
+		users,
+		view: pgView('v', { id: integer('id'), name: text('name') }).as(sql`select id, name from users`),
+	};
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual(['CREATE OR REPLACE VIEW "v" AS (select id, name from users);']);
+
+	// and Postgres accepts it
+	await push({ db, to: from });
+	for (const s of st) await db.query(s);
+});
+
+test('recreate: a column renamed drops and creates the view', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey(), name: text('name') });
+	const from = {
+		users,
+		view: pgView('v', { id: integer('id') }).as(sql`select id from users`),
+	};
+	const to = {
+		users,
+		view: pgView('v', { key: integer('key') }).as(sql`select id as key from users`),
+	};
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "v";',
+		'CREATE VIEW "v" AS (select id as key from users);',
+	]);
+});
+
+test('recreate: a column retyped drops and creates the view', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const from = { users, view: pgView('v', { id: integer('id') }).as(sql`select id from users`) };
+	const to = { users, view: pgView('v', { id: text('id') }).as(sql`select id::text from users`) };
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "v";',
+		'CREATE VIEW "v" AS (select id::text from users);',
+	]);
+});
+
+test('recreate: a column removed or moved drops and creates the view', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey(), name: text('name') });
+	const from = {
+		users,
+		view: pgView('v', { id: integer('id'), name: text('name') }).as(sql`select id, name from users`),
+	};
+	const removed = { users, view: pgView('v', { name: text('name') }).as(sql`select name from users`) };
+	const moved = {
+		users,
+		view: pgView('v', { name: text('name'), id: integer('id') }).as(sql`select name, id from users`),
+	};
+
+	const { sqlStatements: st1 } = await diff(from, removed, []);
+	expect(st1).toStrictEqual(['DROP VIEW "v";', 'CREATE VIEW "v" AS (select name from users);']);
+
+	const { sqlStatements: st2 } = await diff(from, moved, []);
+	expect(st2).toStrictEqual(['DROP VIEW "v";', 'CREATE VIEW "v" AS (select name, id from users);']);
+});
+
+test('recreate: columns the declaration does not know are never proven compatible', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	// an expression in the selection: the kit records no columns for the view
+	const from = { users, view: pgView('v').as((qb) => qb.select({ n: sql<number>`count(*)`.as('n') }).from(users)) };
+	const to = { users, view: pgView('v').as((qb) => qb.select({ n: sql<number>`count(1)`.as('n') }).from(users)) };
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "v";',
+		'CREATE VIEW "v" AS (select count(1) as "n" from "users");',
+	]);
+});
+
+test('recreate: a materialized view has no replace form', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const from = { users, view: pgMaterializedView('v', { id: integer('id') }).as(sql`select id from users`) };
+	const to = { users, view: pgMaterializedView('v', { id: integer('id') }).as(sql`select id from users where id > 1`) };
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP MATERIALIZED VIEW "v";',
+		'CREATE MATERIALIZED VIEW "v" AS (select id from users where id > 1);',
+	]);
+});
+
+test('recreate: a view that selects from a recreated one is dropped first and created last', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey(), name: text('name') });
+	const base1 = pgView('base', { id: integer('id') }).as(sql`select id from users`);
+	const base2 = pgView('base', { key: integer('key') }).as(sql`select id as key from users`);
+	const from = {
+		users,
+		base: base1,
+		over: pgView('over', { id: integer('id') }).as(sql`select id from base`),
+	};
+	const to = {
+		users,
+		base: base2,
+		over: pgView('over', { id: integer('id') }).as(sql`select key as id from base`),
+	};
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "over";',
+		'DROP VIEW "base";',
+		'CREATE VIEW "base" AS (select id as key from users);',
+		'CREATE VIEW "over" AS (select key as id from base);',
+	]);
+
+	await push({ db, to: from });
+	for (const s of st) await db.query(s);
+});
+
+test('recreate: a dependent view whose own definition did not change goes with it', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const from = {
+		users,
+		base: pgView('base', { id: integer('id') }).as(sql`select id from users`),
+		over: pgView('over', { id: integer('id') }).as(sql`select id from base`),
+	};
+	const to = {
+		users,
+		// a renamed column: not replaceable
+		base: pgView('base', { key: integer('key') }).as(sql`select id as key from users`),
+		over: pgView('over', { id: integer('id') }).as(sql`select id from base`),
+	};
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "over";',
+		'DROP VIEW "base";',
+		'CREATE VIEW "base" AS (select id as key from users);',
+		'CREATE VIEW "over" AS (select id from base);',
+	]);
+});
+
+test('replace: a dependent view stays as it is', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const from = {
+		users,
+		base: pgView('base', { id: integer('id') }).as(sql`select id from users`),
+		over: pgView('over', { id: integer('id') }).as(sql`select id from base`),
+	};
+	const to = {
+		users,
+		base: pgView('base', { id: integer('id') }).as(sql`select id from users where id > 0`),
+		over: pgView('over', { id: integer('id') }).as(sql`select id from base`),
+	};
+
+	const { sqlStatements: st } = await diff(from, to, []);
+	expect(st).toStrictEqual(['CREATE OR REPLACE VIEW "base" AS (select id from users where id > 0);']);
+
+	await push({ db, to: from });
+	for (const s of st) await db.query(s);
+});
+
+test('recreate: a snapshot that recorded no columns cannot replace', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const from = { users, view: pgView('v', { id: integer('id') }).as(sql`select id from users`) };
+	const to = { users, view: pgView('v', { id: integer('id') }).as(sql`select id from users where id > 0`) };
+
+	// a version 8 snapshot brought up to 9 has views with no columns
+	const { ddl } = drizzleToDDL(from);
+	ddl.views.update({ set: { columns: [] }, where: { name: 'v' } });
+
+	const { sqlStatements: st } = await diff(ddl, to, []);
+	expect(st).toStrictEqual([
+		'DROP VIEW "v";',
+		'CREATE VIEW "v" AS (select id from users where id > 0);',
+	]);
+});
+
+test('push: the columns are not a change of their own', async () => {
+	const users = pgTable('users', { id: integer('id').primaryKey() });
+	const schema = { users, view: pgView('v', { id: integer('id') }).as(sql`select id from users`) };
+
+	await push({ db, to: schema });
+	const { sqlStatements: pst } = await push({ db, to: schema });
+	expect(pst).toStrictEqual([]);
 });

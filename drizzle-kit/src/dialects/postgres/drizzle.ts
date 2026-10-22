@@ -19,6 +19,7 @@ import {
 	isPgMaterializedView,
 	isPgSequence,
 	isPgView,
+	PgColumn,
 	PgDialect,
 	PgEnumColumn,
 	PgEnumObjectColumn,
@@ -59,6 +60,7 @@ import type {
 	SchemaError,
 	SchemaWarning,
 	UniqueConstraint,
+	View,
 } from './ddl';
 import {
 	defaultNameForFK,
@@ -112,6 +114,29 @@ export const policyFrom = (policy: PgPolicy, dialect: PgDialect) => {
 		using: policyUsing,
 		withCheck,
 	};
+};
+
+/**
+ * The columns a view's definition produces, as far as the declaration tells:
+ * every selected field is a column for a view declared with a column list
+ * (`pgView(name, columns).as(sql)`) and for a query that selects columns
+ * only. A selection with anything else in it (an expression, a nested
+ * object, a subquery) gives an empty list, which the diff reads as
+ * unknown.
+ */
+export const viewColumnsFromSelection = (selection: Record<string, unknown>): View['columns'] => {
+	const columns: View['columns'] = [];
+	for (const field of Object.values(selection)) {
+		if (!is(field, PgColumn)) return [];
+		const { dimensions, typeSchema, sqlType } = unwrapColumn(field);
+		columns.push({
+			name: field.name,
+			type: sqlType.replaceAll('[]', ''),
+			typeSchema,
+			dimensions,
+		});
+	}
+	return columns;
 };
 
 export const unwrapColumn = (column: AnyPgColumn) => {
@@ -694,6 +719,8 @@ export const fromDrizzleSchema = (
 			using,
 			withNoData,
 			materialized,
+			comment,
+			selectedFields,
 		} = view;
 
 		const viewSchema = schema ?? 'public';
@@ -771,6 +798,8 @@ export const fromDrizzleSchema = (
 			definition: dialect.sqlToQuery(query!).sql,
 			name: viewName,
 			schema: viewSchema,
+			columns: viewColumnsFromSelection(selectedFields),
+			comment: comment ?? null,
 			with: hasNonNullOpts ? withOpt : null,
 			withNoData: withNoData ?? null,
 			materialized,

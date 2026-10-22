@@ -95,6 +95,7 @@ function targetOf(statement: JsonStatement): Footprint['statementTarget'] {
 
 		case 'create_view':
 		case 'drop_view':
+		case 'replace_view':
 		case 'alter_view':
 			return ['view', statement.view.schema, statement.view.name];
 		case 'rename_view':
@@ -146,6 +147,7 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 		'set_new_schema',
 		'create_view',
 		'drop_view',
+		'replace_view',
 		'alter_view',
 		'rename_view',
 		'move_view',
@@ -221,6 +223,7 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 			case 'alter_check':
 			case 'recreate_enum':
 			case 'alter_sequence':
+			case 'replace_view':
 			case 'alter_view':
 			case 'alter_policy':
 			case 'recreate_policy':
@@ -674,6 +677,8 @@ class PostgresCommutativity extends FootprintCommutativity<PostgresSnapshot> {
 					writes: [...endpoint('view', s.from.schema, s.from.name), ...endpoint('view', s.to.schema, s.to.name)],
 					reads: [nref('sch', s.from.schema)],
 				};
+			// CREATE OR REPLACE VIEW keeps the view, its name and what depends on it, so it is an alter of the view.
+			case 'replace_view':
 			case 'alter_view':
 				return { writes: altered('view', s.view.schema, s.view.name), reads: [nref('sch', s.view.schema)] };
 			case 'move_view':
