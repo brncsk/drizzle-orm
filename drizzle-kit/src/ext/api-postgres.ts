@@ -23,6 +23,7 @@ import type {
 } from '../dialects/postgres/ddl';
 import { fromEntities, interimToDDL } from '../dialects/postgres/ddl';
 import type { PreparedPostgresSchema } from '../dialects/postgres/drizzle';
+import { adoptDeclaredSpelling } from '../dialects/postgres/expression-spelling';
 import type { PostgresSchemaState } from '../dialects/postgres/snapshot';
 import { isSnapshotV8, upToV8, withViewFields } from '../dialects/postgres/versions';
 import { originUUID } from '../utils';
@@ -211,6 +212,8 @@ export const pushSchema = async (
 	const { ddl: to, errors: _err2 } = interimToDDL(cur);
 
 	// TODO: handle errors, for now don't throw
+
+	await adoptDeclaredSpelling(db, from, to);
 
 	const { sqlStatements, hints } = await runWithApiHints(options?.hints ?? [], async (userHints) => {
 		const { sqlStatements, statements } = await ddlDiff(

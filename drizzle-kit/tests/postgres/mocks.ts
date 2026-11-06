@@ -53,6 +53,7 @@ import {
 	prepareFromSchemaFiles,
 	unwrapColumn,
 } from 'src/dialects/postgres/drizzle';
+import { adoptDeclaredSpelling } from 'src/dialects/postgres/expression-spelling';
 import { applyDeltas } from 'src/dialects/postgres/reconstruct';
 import { mockResolver } from 'src/utils/mocks';
 import '../../src/@types/utils';
@@ -322,6 +323,8 @@ export const push = async (config: {
 		throw new MockError(err3);
 	}
 
+	await adoptDeclaredSpelling(db, ddl1, ddl2);
+
 	const renames = new Set(config.renames ?? []);
 	const parent = ddl1.clone();
 	const { sqlStatements, statements, groupedStatements, deltas } = await ddlDiff(
@@ -372,6 +375,7 @@ export const push = async (config: {
 				migrations,
 			);
 			const { ddl: ddl1, errors: err3 } = interimToDDL(schema);
+			await adoptDeclaredSpelling(db, ddl1, ddl2);
 
 			const parent = ddl1.clone();
 			const { sqlStatements, statements, deltas } = await ddlDiff(

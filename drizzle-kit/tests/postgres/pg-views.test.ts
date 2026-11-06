@@ -1482,7 +1482,8 @@ test('alter view ".as" value', async () => {
 		`CREATE OR REPLACE VIEW "some_view" WITH (check_option = local, security_barrier = true, security_invoker = true) AS (select * from users where id > 101);`,
 	];
 	expect(st).toStrictEqual(st0);
-	expect(pst).toStrictEqual([]); // push ignored definition change
+	// a push compares the query by what it means, as Postgres prints it
+	expect(pst).toStrictEqual(st0);
 });
 
 test('alter view ".as" value with existing flag', async () => {
@@ -1553,7 +1554,7 @@ test('alter materialized view ".as" value', async () => {
 		`CREATE MATERIALIZED VIEW "some_view" WITH (autovacuum_vacuum_cost_limit = 1) AS (SELECT '1234');`,
 	];
 	expect(st).toStrictEqual(st0);
-	expect(pst).toStrictEqual([]); // we ignore definition changes for push
+	expect(pst).toStrictEqual(st0);
 });
 
 test('alter materialized view ".as" value with existing flag', async () => {
@@ -2107,7 +2108,11 @@ test('push view with same name', async () => {
 	expect(st).toStrictEqual([
 		'CREATE OR REPLACE VIEW "view" AS (select distinct "id" from "test" where "test"."id" = 1);',
 	]);
-	expect(pst).toStrictEqual([]);
+	// a push reads the column as `integer` and the declaration names it `serial`, so it creates the view again
+	expect(pst).toStrictEqual([
+		'DROP VIEW "view";',
+		'CREATE VIEW "view" AS (select distinct "id" from "test" where "test"."id" = 1);',
+	]);
 });
 
 test('push materialized view with same name', async () => {
@@ -2133,7 +2138,7 @@ test('push materialized view with same name', async () => {
 		'DROP MATERIALIZED VIEW "view";',
 		'CREATE MATERIALIZED VIEW "view" AS (select distinct "id" from "test" where "test"."id" = 1);',
 	]);
-	expect(pst).toStrictEqual([]);
+	expect(pst).toStrictEqual(st);
 });
 
 // https://github.com/drizzle-team/drizzle-orm/issues/4265
@@ -2587,8 +2592,7 @@ test('topological sort test. existing view starts reading a new view', async () 
 		'CREATE VIEW "v_new" AS (select "id" from "t");',
 		'CREATE OR REPLACE VIEW "v2" AS (select "id" from "v_new");',
 	]);
-	// push ignores definition changes
-	expect(pst1).toStrictEqual(['CREATE VIEW "v_new" AS (select "id" from "t");']);
+	expect(pst1).toStrictEqual(st1);
 });
 
 // "v1" keeps its column list, so it is replaced in place and "v2", which selects from it, stays as it is.
@@ -2613,9 +2617,7 @@ test(
 		expect(st1).toStrictEqual([
 			'CREATE OR REPLACE VIEW "v1" AS (select "id" from "t" where "t"."id" > 0);',
 		]);
-		for (const statement of st1) await db.query(statement);
-		// push ignores definition changes
-		expect(pst1).toStrictEqual([]);
+		expect(pst1).toStrictEqual(st1);
 	},
 );
 

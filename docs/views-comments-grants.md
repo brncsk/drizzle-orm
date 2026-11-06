@@ -49,7 +49,15 @@ are created in. A materialized view has no replace form and is always
 recreated. A recreated view is granted its privileges again, since
 `DROP VIEW` took them with it.
 
-`push` compares no definitions, so it compares no columns either.
+`push` compares a definition by what it means. Postgres keeps the parsed
+query, not its text, and prints it in its own spelling, so the declared text
+and the text that introspection reads differ for the same query. Before the
+diff, `push` creates each declared view whose text differs from the
+database's under a probe name, reads its definition back with
+`pg_get_viewdef` and rolls back. When Postgres prints the two queries the
+same, the view is unchanged; otherwise the rules above apply. A view that is
+renamed or moved is compared with the views in the database that the schema
+does not declare. A trigger's `WHEN` condition is compared the same way.
 
 ## Comments
 

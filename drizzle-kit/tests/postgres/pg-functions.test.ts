@@ -12,7 +12,15 @@ import {
 } from 'drizzle-orm/pg-core';
 import { ddlDiffDry } from 'src/dialects/postgres/diff';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-import { conflictsFromSchema, diff, diffIntrospect, drizzleToDDL, prepareTestDatabase, TestDatabase } from './mocks';
+import {
+	conflictsFromSchema,
+	diff,
+	diffIntrospect,
+	drizzleToDDL,
+	prepareTestDatabase,
+	push,
+	TestDatabase,
+} from './mocks';
 
 /*
 	Functions, triggers and extensions as schema entities: what the diff
@@ -353,7 +361,7 @@ test('check sees a conflict between a function signature change and a new caller
 	expect(await conflict(body)).toBeUndefined();
 });
 
-test('a trigger condition is written as `WHEN`, replaced in place, and on a push only its presence is compared', async () => {
+test('a trigger condition is written as `WHEN` and replaced in place', async () => {
 	const audit = pgFunction('audit', {
 		returns: 'trigger',
 		language: 'plpgsql',
@@ -381,15 +389,81 @@ test('a trigger condition is written as `WHEN`, replaced in place, and on a push
 		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();',
 	]);
 	await apply(unconditional);
+});
 
-	// Postgres prints the condition in its own spelling: a push takes it as the declared one, and sees one added or removed
-	const { ddl: declared } = drizzleToDDL(schema1);
-	const { ddl: printed } = drizzleToDDL({ ...schema1, trigger: trigger('(old.name IS DISTINCT FROM new.name)') });
-	const { ddl: none } = drizzleToDDL({ ...schema1, trigger: trigger() });
-	expect((await ddlDiffDry(printed, declared, 'push')).sqlStatements).toStrictEqual([]);
-	expect((await ddlDiffDry(printed, declared, 'default')).sqlStatements).toHaveLength(1);
-	expect((await ddlDiffDry(none, declared, 'push')).sqlStatements).toStrictEqual([created.at(-1)]);
-	expect((await ddlDiffDry(printed, none, 'push')).sqlStatements).toStrictEqual(unconditional);
+test('a push compares a trigger condition by what it means, as Postgres prints it', async () => {
+	const audit = pgFunction('audit', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NEW; END',
+	});
+	const trigger = (condition?: string) =>
+		pgTrigger('users_audit', { on: users, when: 'AFTER UPDATE', condition, function: audit });
+	const replace = (condition: string) =>
+		`CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION "public"."audit"();`;
+
+	const schema1 = { users, audit, trigger: trigger('OLD.name IS DISTINCT FROM NEW.name') };
+	await push({ db, to: schema1 });
+	const [standing] = await db.query<{ definition: string }>(
+		`SELECT pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgname = 'users_audit'`,
+	);
+	// Postgres keeps its own spelling, and a push of the same declaration changes nothing
+	expect(standing!.definition).toContain('WHEN ((old.name IS DISTINCT FROM new.name))');
+	expect((await push({ db, to: schema1 })).sqlStatements).toStrictEqual([]);
+
+	// a changed condition is a change, also when only its operator changes
+	const schema2 = { ...schema1, trigger: trigger('OLD.name IS NOT DISTINCT FROM NEW.name') };
+	expect((await push({ db, to: schema2 })).sqlStatements).toStrictEqual([
+		replace('OLD.name IS NOT DISTINCT FROM NEW.name'),
+	]);
+
+	// a condition that the probe cannot create (it names a column that the push adds) is replaced
+	const withEmail = pgTable('users', { id: integer('id').primaryKey(), name: text('name'), email: text('email') });
+	const schema3 = {
+		users: withEmail,
+		audit,
+		trigger: pgTrigger('users_audit', {
+			on: withEmail,
+			when: 'AFTER UPDATE',
+			condition: 'OLD.email IS DISTINCT FROM NEW.email',
+			function: audit,
+		}),
+	};
+	expect((await push({ db, to: schema3 })).sqlStatements).toStrictEqual([
+		'ALTER TABLE "users" ADD COLUMN "email" text;',
+		replace('OLD.email IS DISTINCT FROM NEW.email'),
+	]);
+
+	// adding and removing a condition are changes too
+	expect((await push({ db, to: { ...schema3, trigger: trigger() } })).sqlStatements).toContain(
+		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();',
+	);
+});
+
+test('a push compares the condition of a constraint trigger by what it means', async () => {
+	const check = pgFunction('check_users', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NULL; END',
+	});
+	const trigger = (condition: string) =>
+		pgTrigger('users_check', {
+			on: users,
+			when: 'AFTER UPDATE',
+			condition,
+			constraint: { deferrable: true, initiallyDeferred: true },
+			function: check,
+		});
+
+	const schema1 = { users, check, trigger: trigger('OLD.id <> NEW.id') };
+	await push({ db, to: schema1 });
+	expect((await push({ db, to: schema1 })).sqlStatements).toStrictEqual([]);
+
+	// Postgres cannot replace a constraint trigger, so a changed condition drops it and creates it again
+	expect((await push({ db, to: { ...schema1, trigger: trigger('OLD.id = NEW.id') } })).sqlStatements).toStrictEqual([
+		'DROP TRIGGER "users_check" ON "users";',
+		'CREATE CONSTRAINT TRIGGER "users_check" AFTER UPDATE ON "users" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.id = NEW.id) EXECUTE FUNCTION "public"."check_users"();',
+	]);
 });
 
 test('a constraint trigger is created with its deferral, dropped and created again when it changes, and commented alone', async () => {

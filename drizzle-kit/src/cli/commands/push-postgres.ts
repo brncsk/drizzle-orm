@@ -20,6 +20,7 @@ import { interimToDDL } from '../../dialects/postgres/ddl';
 import { ddlDiff } from '../../dialects/postgres/diff';
 import { fromDrizzleSchema } from '../../dialects/postgres/drizzle';
 import type { SchemaSource } from '../../dialects/postgres/drizzle';
+import { adoptDeclaredSpelling } from '../../dialects/postgres/expression-spelling';
 import type { JsonStatement } from '../../dialects/postgres/statements';
 import { prepareEntityFilter } from '../../dialects/pull-utils';
 import type { DB } from '../../utils';
@@ -112,6 +113,8 @@ export const handle = async (
 			dialect: 'postgresql',
 		});
 	}
+
+	await adoptDeclaredSpelling(db, ddl1, ddl2);
 
 	// const blanks = new Set<string>();
 	const { sqlStatements, statements: jsonStatements, groupedStatements } = await ddlDiff(

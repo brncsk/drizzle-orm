@@ -32,7 +32,7 @@ const renameSchemaConvertor = convertor('rename_schema', (st) => {
 	return `ALTER SCHEMA "${st.from.name}" RENAME TO "${st.to.name}";\n`;
 });
 
-const viewKey = (view: { schema: string; name: string }) =>
+export const viewKey = (view: { schema: string; name: string }) =>
 	view.schema !== 'public' ? `"${view.schema}"."${view.name}"` : `"${view.name}"`;
 
 /** `COMMENT ON VIEW`; a null comment removes the one there is. */
@@ -44,7 +44,12 @@ const viewCommentStatement = (
 	return `COMMENT ON ${clause} ${viewKey(view)} IS ${text};`;
 };
 
-const createViewStatement = (view: View, replace: boolean) => {
+/**
+ * The `CREATE VIEW` statement of a view, `CREATE OR REPLACE VIEW` with
+ * `replace`. A push also runs it under a probe name, to read the declared
+ * query back as Postgres prints it (`adoptDeclaredSpelling`).
+ */
+export const createViewStatement = (view: View, replace: boolean) => {
 	const { definition, with: withOption, materialized, withNoData, tablespace, using } = view;
 
 	const name = viewKey(view);
@@ -1058,7 +1063,7 @@ const commentFunctionConvertor = convertor('comment_function', (st) => {
 	return functionCommentStatement(st.function);
 });
 
-const triggerTable = (trigger: Trigger) =>
+export const triggerTable = (trigger: Pick<Trigger, 'schema' | 'table'>) =>
 	trigger.schema !== 'public' ? `"${trigger.schema}"."${trigger.table}"` : `"${trigger.table}"`;
 
 /** `COMMENT ON TRIGGER`; a null comment removes the one there is. */
@@ -1067,19 +1072,25 @@ const triggerCommentStatement = (trigger: Trigger) => {
 	return `COMMENT ON TRIGGER "${trigger.name}" ON ${triggerTable(trigger)} IS ${text};`;
 };
 
+/**
+ * The `CREATE OR REPLACE TRIGGER` statement of a trigger, or `CREATE
+ * CONSTRAINT TRIGGER` for a constraint trigger: Postgres cannot replace a
+ * constraint trigger, so the diff drops one before it creates it again.
+ * A push also runs it under a probe name, to read the declared condition
+ * back as Postgres prints it (`adoptDeclaredSpelling`).
+ */
+export const createTriggerStatement = (trigger: Trigger) => {
+	const create = trigger.constraint !== null ? 'CREATE CONSTRAINT TRIGGER' : 'CREATE OR REPLACE TRIGGER';
+	return `${create} "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)}${
+		trigger.constraint !== null ? ` ${trigger.constraint}` : ''
+	} FOR EACH ${trigger.level}${
+		trigger.condition ? ` WHEN (${trigger.condition})` : ''
+	} EXECUTE FUNCTION "${trigger.functionSchema}"."${trigger.functionName}"();`;
+};
+
 const createTriggerConvertor = convertor('create_trigger', (st) => {
 	const { trigger, from } = st;
-	const schema = trigger.functionSchema;
-	const name = trigger.functionName;
-	// Postgres cannot replace a constraint trigger, so the diff drops one before it creates it again
-	const create = trigger.constraint !== null ? 'CREATE CONSTRAINT TRIGGER' : 'CREATE OR REPLACE TRIGGER';
-	const statements = [
-		`${create} "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)}${
-			trigger.constraint !== null ? ` ${trigger.constraint}` : ''
-		} FOR EACH ${trigger.level}${
-			trigger.condition ? ` WHEN (${trigger.condition})` : ''
-		} EXECUTE FUNCTION "${schema}"."${name}"();`,
-	];
+	const statements = [createTriggerStatement(trigger)];
 	if (trigger.comment !== (from?.comment ?? null)) statements.push(triggerCommentStatement(trigger));
 	return statements;
 });
