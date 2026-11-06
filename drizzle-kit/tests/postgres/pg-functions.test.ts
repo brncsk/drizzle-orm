@@ -637,6 +637,41 @@ test('a constraint trigger is dropped before its function and created again afte
 	await apply(sqlStatements);
 });
 
+// Postgres refuses to drop a function that a trigger's condition calls, as it refuses one that the trigger executes.
+test('a trigger whose condition calls a dropped function is dropped before the function and created again after it', async () => {
+	const app = pgSchema('app');
+	const audit = pgFunction('audit', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NEW; END',
+	});
+	const named = app.function('is_named', {
+		args: { name: 'text' },
+		returns: 'boolean',
+		language: 'sql',
+		attributes: 'IMMUTABLE',
+		body: 'SELECT $1 IS NOT NULL',
+	});
+	const trigger = (condition?: string) =>
+		pgTrigger('users_audit', { on: users, when: 'AFTER UPDATE', condition, function: audit });
+	const schema1 = { app, users, audit, named, trigger: trigger('app.is_named(NEW.name)') };
+	const schema2 = { app, users, audit, trigger: trigger('NEW.name IS NOT NULL') };
+	const expected = [
+		'DROP TRIGGER "users_audit" ON "users";',
+		'DROP FUNCTION "app"."is_named"(text);',
+		'CREATE OR REPLACE TRIGGER "users_audit" AFTER UPDATE ON "users" FOR EACH ROW WHEN (NEW.name IS NOT NULL) EXECUTE FUNCTION "public"."audit"();',
+	];
+
+	// a generate reads the condition as declared
+	const { sqlStatements: generated } = await diff(schema1, schema2, []);
+	expect(generated).toStrictEqual(expected);
+
+	// a push reads it as Postgres prints it, with the function's schema
+	await push({ db, to: schema1 });
+	expect((await push({ db, to: schema2 })).sqlStatements).toStrictEqual(expected);
+	expect((await push({ db, to: schema2 })).sqlStatements).toStrictEqual([]);
+});
+
 test('a trigger with transition tables is created with them, replaced in place when they change, and a push of the same declaration changes nothing', async () => {
 	const count = pgFunction('count_users', {
 		returns: 'trigger',

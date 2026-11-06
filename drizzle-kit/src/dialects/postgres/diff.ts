@@ -937,12 +937,22 @@ export const ddlDiff = async (
 		it.entityType === 'triggers' && ddl2.triggers.hasDiff(it)
 	);
 	const sameTrigger = (a: Trigger, b: Trigger) => a.schema === b.schema && a.table === b.table && a.name === b.name;
-	// a trigger that calls a function that is dropped, whether for good or to be created again, is dropped before it and created again after it when the schema still declares it
-	const goneFunctions = new Set(
-		[...deletedFunctions, ...functionsToRecreate.map((r) => r.from)].map((fn) => `${fn.schema}.${fn.name}`),
-	);
+	/*
+		A trigger that calls a function that is dropped, whether for good or
+		to be created again, is dropped before it and created again after it
+		when the schema still declares it. A trigger calls a function in two
+		places: the function it executes, and its `WHEN` condition. Postgres
+		records a dependency for both, so a trigger whose old condition calls
+		the function is dropped first too, although a `CREATE OR REPLACE`
+		after the drop would give it the new condition.
+	*/
+	const goneFunctionList = [...deletedFunctions, ...functionsToRecreate.map((r) => r.from)];
+	const goneFunctions = new Set(goneFunctionList.map((fn) => `${fn.schema}.${fn.name}`));
+	const callsGoneFunction = (it: Trigger) =>
+		goneFunctions.has(`${it.functionSchema}.${it.functionName}`)
+		|| goneFunctionList.some((fn) => callsFunction(fn, it.condition));
 	const triggersToDrop = ddl1.triggers.list().filter((it) =>
-		goneFunctions.has(`${it.functionSchema}.${it.functionName}`) && !deletedTriggers.some((d) => sameTrigger(d, it))
+		callsGoneFunction(it) && !deletedTriggers.some((d) => sameTrigger(d, it))
 	);
 	/*
 		Postgres has no `CREATE OR REPLACE` for a constraint trigger, and does
