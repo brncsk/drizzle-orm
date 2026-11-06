@@ -132,8 +132,20 @@ test.each([
 		'IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog, public',
 		'IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog, public',
 	],
+	['STRICT COST 10.0 ROWS 5', 'STRICT COST 10 ROWS 5'],
+	['STABLE ROWS 1000', 'STABLE'],
 ])('normalizeFunctionAttributes(%s) -> %s', (input, expected) => {
 	expect(normalizeFunctionAttributes(input)).toBe(expected);
+});
+
+test.each([
+	['IMMUTABLE COST 100 ROWS 1000', 'sql', 'IMMUTABLE'],
+	['IMMUTABLE COST 100', 'c', 'IMMUTABLE COST 100'],
+	['IMMUTABLE COST 1', 'internal', 'IMMUTABLE'],
+	['IMMUTABLE COST 1', 'plpgsql', 'IMMUTABLE COST 1'],
+	['IMMUTABLE STRICT PARALLEL SAFE ROWS 1', 'sql', 'IMMUTABLE STRICT PARALLEL SAFE ROWS 1'],
+])('normalizeFunctionAttributes(%s, %s) -> %s', (input, language, expected) => {
+	expect(normalizeFunctionAttributes(input, language)).toBe(expected);
 });
 
 test.each([

@@ -902,7 +902,7 @@ export const fromDrizzleSchema = (
 			returns: normalizeFunctionReturns(fn.returns),
 			language: fn.language,
 			body: body.trim(),
-			attributes: normalizeFunctionAttributes(fn.attributes ?? null),
+			attributes: normalizeFunctionAttributes(fn.attributes ?? null, fn.language),
 			comment: fn.comment ?? null,
 		});
 	}

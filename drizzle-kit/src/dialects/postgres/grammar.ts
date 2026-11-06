@@ -2438,17 +2438,47 @@ export const normalizeFunctionReturns = (returns: string) => {
 };
 
 /**
+ * The `COST` that Postgres gives a function which declares none: 1 for a
+ * function in C or an internal one, 100 for a function in any other
+ * language (`CREATE FUNCTION` in the Postgres manual).
+ */
+export const defaultFunctionCost = (language: string) =>
+	language.toLowerCase() === 'c' || language.toLowerCase() === 'internal' ? 1 : 100;
+
+/**
+ * The `ROWS` that Postgres gives a set-returning function which declares
+ * none. A function that returns no set has no row estimate at all.
+ */
+export const DEFAULT_FUNCTION_ROWS = 1000;
+
+/**
+ * A `COST` or `ROWS` value as JavaScript prints the number, so that `10`,
+ * `10.0` and the float that `pg_proc` stores compare equal. A value that is
+ * not a number is kept as written.
+ */
+const readFunctionEstimate = (value: string) => {
+	const n = Number(value);
+	return Number.isFinite(n) ? String(n) : value;
+};
+
+/**
  * A function's attributes in one spelling and order, so that a declared
  * `STABLE SECURITY DEFINER SET search_path = pg_catalog, public` and the
  * same read off `pg_proc` compare equal: the volatility, `STRICT`,
  * `LEAKPROOF`, `SECURITY DEFINER`, `PARALLEL SAFE` or `RESTRICTED`,
  * `COST`, `ROWS`, then each `SET name = value` as written. The defaults
  * (`VOLATILE`, `CALLED ON NULL INPUT`, `NOT LEAKPROOF`, `SECURITY
- * INVOKER`, `PARALLEL UNSAFE`) are left out; nothing declared is the
- * empty string. `WINDOW` and `SUPPORT` are kept where they stand, after
- * the rest. Null when nothing remains.
+ * INVOKER`, `PARALLEL UNSAFE`, `ROWS 1000`) are left out; nothing declared
+ * is the empty string. `WINDOW` and `SUPPORT` are kept where they stand,
+ * after the rest. Null when nothing remains.
+ *
+ * `COST` and `ROWS` are numbers, written as JavaScript prints them, so a
+ * declared `COST 2.50` and the `2.5` of `procost` compare equal. The default
+ * cost depends on the language ({@link defaultFunctionCost}): with a
+ * `language`, a `COST` equal to that default is left out too, so a declaration
+ * that spells it out and a function that never set it compare equal.
  */
-export const normalizeFunctionAttributes = (attributes: string | null): string | null => {
+export const normalizeFunctionAttributes = (attributes: string | null, language?: string): string | null => {
 	if (!attributes) return null;
 	const text = attributes.replace(/\s+/g, ' ').trim();
 	const parts = {
@@ -2518,14 +2548,17 @@ export const normalizeFunctionAttributes = (attributes: string | null): string |
 			break;
 		}
 	}
+	const cost = parts.cost === null ? null : readFunctionEstimate(parts.cost);
+	const rows = parts.rows === null ? null : readFunctionEstimate(parts.rows);
+	const defaultCost = language === undefined ? null : String(defaultFunctionCost(language));
 	const out = [
 		...(parts.volatility && parts.volatility !== 'VOLATILE' ? [parts.volatility] : []),
 		...(parts.strict ? ['STRICT'] : []),
 		...(parts.leakproof ? ['LEAKPROOF'] : []),
 		...(parts.definer ? ['SECURITY DEFINER'] : []),
 		...(parts.parallel && parts.parallel !== 'UNSAFE' ? [`PARALLEL ${parts.parallel}`] : []),
-		...(parts.cost ? [`COST ${parts.cost}`] : []),
-		...(parts.rows ? [`ROWS ${parts.rows}`] : []),
+		...(cost !== null && cost !== defaultCost ? [`COST ${cost}`] : []),
+		...(rows !== null && rows !== String(DEFAULT_FUNCTION_ROWS) ? [`ROWS ${rows}`] : []),
 		...parts.sets,
 		...parts.rest,
 	];
@@ -2537,13 +2570,20 @@ export const normalizeFunctionAttributes = (attributes: string | null): string |
  * arguments of `pg_get_function_arguments` split on the top-level commas
  * into names and normalized types, the return type normalized, the body
  * trimmed, and the attributes rebuilt from `pg_proc`'s flags and
- * `proconfig` in the normalized spelling. An argument with a mode or a
- * default keeps them in its type, where a declaration cannot match them.
+ * `proconfig` in the normalized spelling. `COST` comes from `procost` and,
+ * for a set-returning function, `ROWS` from `prorows`; the normalization
+ * leaves out the defaults of the function's language. An argument with a
+ * mode or a default keeps them in its type, where a declaration cannot
+ * match them.
  */
 export const functionFromCatalog = (row: {
 	args: string;
 	returns: string;
+	language: string;
 	body: string;
+	cost: number;
+	rows: number;
+	returnsSet: boolean;
 	volatile: 'i' | 's' | 'v';
 	parallel: 's' | 'r' | 'u';
 	definer: boolean;
@@ -2557,6 +2597,8 @@ export const functionFromCatalog = (row: {
 		row.leakproof ? 'LEAKPROOF' : '',
 		row.definer ? 'SECURITY DEFINER' : '',
 		row.parallel === 's' ? 'PARALLEL SAFE' : row.parallel === 'r' ? 'PARALLEL RESTRICTED' : '',
+		`COST ${row.cost}`,
+		row.returnsSet ? `ROWS ${row.rows}` : '',
 		...(row.config ?? []).map((entry) => {
 			const at = entry.indexOf('=');
 			return `SET ${entry.slice(0, at)} = ${entry.slice(at + 1)}`;
@@ -2570,7 +2612,7 @@ export const functionFromCatalog = (row: {
 		args,
 		returns: normalizeFunctionReturns(row.returns),
 		body: row.body.trim(),
-		attributes: normalizeFunctionAttributes(attributes),
+		attributes: normalizeFunctionAttributes(attributes, row.language),
 	};
 };
 

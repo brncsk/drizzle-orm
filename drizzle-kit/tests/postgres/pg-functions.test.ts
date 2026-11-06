@@ -391,6 +391,39 @@ test('a trigger condition is written as `WHEN` and replaced in place', async () 
 	await apply(unconditional);
 });
 
+test('a push compares the cost and the row estimate of a function as the catalog stores them', async () => {
+	const rooms = (attributes: string) =>
+		pgFunction('rooms', {
+			args: { n: 'integer' },
+			returns: 'TABLE (id integer, name text)',
+			language: 'sql',
+			attributes,
+			body: 'SELECT id, name FROM users LIMIT n',
+		});
+	const single = pgFunction('single', {
+		returns: 'integer',
+		language: 'sql',
+		attributes: 'IMMUTABLE COST 100',
+		body: 'SELECT 1',
+	});
+
+	// an estimate that is not the default is read back, and the defaults spelled out are no change
+	const schema1 = { users, single, rooms: rooms('STABLE ROWS 1 COST 5') };
+	await push({ db, to: schema1 });
+	expect((await push({ db, to: schema1 })).sqlStatements).toStrictEqual([]);
+	expect((await push({ db, to: { ...schema1, rooms: rooms('STABLE COST 5.0 ROWS 1') } })).sqlStatements)
+		.toStrictEqual([]);
+
+	// a changed estimate replaces the function in place, and so does a return to the defaults
+	const replaced = (await push({ db, to: { ...schema1, rooms: rooms('STABLE ROWS 10 COST 5') } })).sqlStatements;
+	expect(replaced).toHaveLength(1);
+	expect(replaced[0]).toContain('CREATE OR REPLACE FUNCTION "public"."rooms"');
+	expect(replaced[0]).toContain('STABLE COST 5 ROWS 10');
+	const schema2 = { ...schema1, rooms: rooms('STABLE COST 100 ROWS 1000') };
+	expect((await push({ db, to: schema2 })).sqlStatements).toHaveLength(1);
+	expect((await push({ db, to: schema2 })).sqlStatements).toStrictEqual([]);
+});
+
 test('a push compares a trigger condition by what it means, as Postgres prints it', async () => {
 	const audit = pgFunction('audit', {
 		returns: 'trigger',

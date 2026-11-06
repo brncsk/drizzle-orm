@@ -482,6 +482,9 @@ export const fromDatabase = async (
 		strict: boolean;
 		leakproof: boolean;
 		config: string[] | null;
+		cost: number;
+		rows: number;
+		returnsSet: boolean;
 		comment: string | null;
 	};
 	// the functions of the schemas, leaving out what an extension installed
@@ -502,6 +505,9 @@ export const fromDatabase = async (
 			proisstrict AS "strict",
 			proleakproof AS "leakproof",
 			proconfig::text[] AS "config",
+			procost::float8 AS "cost",
+			prorows::float8 AS "rows",
+			proretset AS "returnsSet",
 			pg_catalog.obj_description(pg_proc.oid, 'pg_proc') AS "comment"
 		FROM pg_catalog.pg_proc
 		JOIN pg_catalog.pg_namespace ON pg_namespace.oid OPERATOR(pg_catalog.=) pronamespace
