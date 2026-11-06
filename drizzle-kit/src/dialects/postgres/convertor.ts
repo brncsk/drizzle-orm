@@ -1072,6 +1072,16 @@ const triggerCommentStatement = (trigger: Trigger) => {
 	return `COMMENT ON TRIGGER "${trigger.name}" ON ${triggerTable(trigger)} IS ${text};`;
 };
 
+/** The `REFERENCING` clause of a trigger with transition tables, with a space before it, or nothing. */
+const renderTransitionTables = (trigger: Trigger) => {
+	const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+	const tables = [
+		...(trigger.oldTable !== null ? [`OLD TABLE AS ${quote(trigger.oldTable)}`] : []),
+		...(trigger.newTable !== null ? [`NEW TABLE AS ${quote(trigger.newTable)}`] : []),
+	];
+	return tables.length > 0 ? ` REFERENCING ${tables.join(' ')}` : '';
+};
+
 /**
  * The `CREATE OR REPLACE TRIGGER` statement of a trigger, or `CREATE
  * CONSTRAINT TRIGGER` for a constraint trigger: Postgres cannot replace a
@@ -1083,7 +1093,7 @@ export const createTriggerStatement = (trigger: Trigger) => {
 	const create = trigger.constraint !== null ? 'CREATE CONSTRAINT TRIGGER' : 'CREATE OR REPLACE TRIGGER';
 	return `${create} "${trigger.name}" ${trigger.when} ON ${triggerTable(trigger)}${
 		trigger.constraint !== null ? ` ${trigger.constraint}` : ''
-	} FOR EACH ${trigger.level}${
+	}${renderTransitionTables(trigger)} FOR EACH ${trigger.level}${
 		trigger.condition ? ` WHEN (${trigger.condition})` : ''
 	} EXECUTE FUNCTION "${trigger.functionSchema}"."${trigger.functionName}"();`;
 };

@@ -637,6 +637,72 @@ test('a constraint trigger is dropped before its function and created again afte
 	await apply(sqlStatements);
 });
 
+test('a trigger with transition tables is created with them, replaced in place when they change, and a push of the same declaration changes nothing', async () => {
+	const count = pgFunction('count_users', {
+		returns: 'trigger',
+		language: 'plpgsql',
+		body: 'BEGIN RETURN NULL; END',
+	});
+	const trigger = (config: Partial<Parameters<typeof pgTrigger>[1]> = {}) =>
+		pgTrigger('users_count', {
+			on: users,
+			when: 'AFTER UPDATE',
+			level: 'STATEMENT',
+			referencing: { newTable: 'after_rows' },
+			function: count,
+			...config,
+		});
+	const schema1 = { users, count, trigger: trigger() };
+
+	const { sqlStatements: created } = await diff({}, schema1, []);
+	expect(created.at(-1)).toBe(
+		'CREATE OR REPLACE TRIGGER "users_count" AFTER UPDATE ON "users" REFERENCING NEW TABLE AS "after_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."count_users"();',
+	);
+	await apply(created);
+
+	// a second table, and a name that needs quotes
+	const both = trigger({ referencing: { oldTable: 'Before Rows', newTable: 'after_rows' } });
+	const { sqlStatements: replaced } = await diff(schema1, { ...schema1, trigger: both }, []);
+	expect(replaced).toStrictEqual([
+		'CREATE OR REPLACE TRIGGER "users_count" AFTER UPDATE ON "users" REFERENCING OLD TABLE AS "Before Rows" NEW TABLE AS "after_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."count_users"();',
+	]);
+	await apply(replaced);
+
+	// the function reads the tables under the declared names
+	await db.query(`CREATE TABLE counted (n bigint)`);
+	await db.query(`CREATE OR REPLACE FUNCTION count_users() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			INSERT INTO counted SELECT count(*) FROM "Before Rows" b JOIN after_rows a USING (id);
+			RETURN NULL;
+		END $$`);
+	await db.query(`INSERT INTO users VALUES (1, 'a'), (2, 'b')`);
+	await db.query(`UPDATE users SET name = 'c'`);
+	expect(await db.query(`SELECT n::int AS n FROM counted`)).toStrictEqual([{ n: 2 }]);
+	await db.query(`DROP TABLE counted`);
+
+	// a push of the same declaration changes nothing, and one without the tables drops them
+	await db.query(
+		`CREATE OR REPLACE FUNCTION count_users() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`,
+	);
+	const bothSchema = { ...schema1, trigger: both };
+	expect((await push({ db, to: bothSchema })).sqlStatements).toStrictEqual([]);
+	expect((await push({ db, to: { ...schema1, trigger: trigger({ referencing: undefined }) } })).sqlStatements)
+		.toStrictEqual([
+			'CREATE OR REPLACE TRIGGER "users_count" AFTER UPDATE ON "users" FOR EACH STATEMENT EXECUTE FUNCTION "public"."count_users"();',
+		]);
+
+	// Postgres takes transition tables only on a plain AFTER trigger with one event and no column list
+	expect(() => trigger({ referencing: {} })).toThrow(/names an old table, a new table or both/);
+	expect(() => trigger({ when: 'BEFORE UPDATE' })).toThrow(/so it is a plain AFTER trigger/);
+	expect(() => trigger({ level: 'ROW', constraint: { deferrable: true } })).toThrow(/so it is a plain AFTER trigger/);
+	expect(() => trigger({ when: 'AFTER INSERT OR UPDATE' })).toThrow(/so it fires on one event, without a column list/);
+	expect(() => trigger({ when: 'AFTER UPDATE OF name' })).toThrow(/so it fires on one event, without a column list/);
+	expect(() => trigger({ when: 'AFTER INSERT', referencing: { oldTable: 'gone' } })).toThrow(
+		/has an old table, so it fires AFTER UPDATE or AFTER DELETE/,
+	);
+	expect(() => trigger({ when: 'AFTER DELETE' })).toThrow(/has a new table, so it fires AFTER INSERT or AFTER UPDATE/);
+});
+
 test('an extension is created first and dropped last', async () => {
 	const plpgsql = pgExtension('plpgsql');
 	const acl = pgSchema('acl');
@@ -705,6 +771,13 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 			function: audit,
 			comment: 'Checks a write at commit.',
 		}),
+		changed: pgTrigger('users_changed', {
+			on: users,
+			when: 'AFTER UPDATE',
+			level: 'STATEMENT',
+			referencing: { oldTable: 'before', newTable: 'Changed Rows' },
+			function: audit,
+		}),
 		citext: pgExtension('citext'),
 	};
 	const { pushSqlStatements, generateSqlStatements, ddlAfterPull } = await diffIntrospect(
@@ -739,6 +812,8 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		level: 'ROW',
 		condition: null,
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'public',
 		functionName: 'audit_users',
 		comment: 'Audits every write.',
@@ -752,6 +827,8 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		// as Postgres prints it
 		condition: '(old.name IS DISTINCT FROM new.name)',
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'public',
 		functionName: 'audit_users',
 		comment: null,
@@ -764,9 +841,26 @@ test('a pull reads the functions, the triggers and the extensions back, and the 
 		level: 'ROW',
 		condition: null,
 		constraint: 'DEFERRABLE INITIALLY DEFERRED',
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'public',
 		functionName: 'audit_users',
 		comment: 'Checks a write at commit.',
+	}, {
+		entityType: 'triggers',
+		schema: 'public',
+		table: 'users',
+		name: 'users_changed',
+		when: 'AFTER UPDATE',
+		level: 'STATEMENT',
+		condition: null,
+		constraint: null,
+		// Postgres prints the second name in quotes, and the pull reads it without them
+		oldTable: 'before',
+		newTable: 'Changed Rows',
+		functionSchema: 'public',
+		functionName: 'audit_users',
+		comment: null,
 	}]);
 	// the extensions the database holds, the two the test database comes with among them, without a pinned version in the file
 	expect(ddlAfterPull.extensions.list().map((it) => it.name)).toStrictEqual(['citext', 'pg_trgm', 'vector']);

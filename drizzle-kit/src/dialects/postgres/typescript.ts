@@ -28,6 +28,7 @@ import {
 	defaultNameForPK,
 	defaults,
 	renderTriggerConstraintOption,
+	renderTriggerReferencingOption,
 	typeFor,
 } from './grammar';
 
@@ -527,6 +528,9 @@ export const ddlToTypeScript = (
 			...(it.level !== 'ROW' ? [`\tlevel: ${escapeForTsLiteral(it.level)},`] : []),
 			...(it.condition !== null ? [`\tcondition: ${escapeForTsLiteral(it.condition)},`] : []),
 			...(it.constraint !== null ? [`\tconstraint: ${renderTriggerConstraintOption(it.constraint)},`] : []),
+			...(it.oldTable !== null || it.newTable !== null
+				? [`\treferencing: ${renderTriggerReferencingOption(it.oldTable, it.newTable)},`]
+				: []),
 			`\tfunction: ${fn},`,
 			...(it.comment !== null ? [`\tcomment: ${escapeForTsLiteral(it.comment)},`] : []),
 		];

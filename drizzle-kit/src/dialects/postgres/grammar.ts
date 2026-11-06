@@ -2662,21 +2662,45 @@ export const renderTriggerConstraintOption = (deferral: string) => {
 	return options.length > 0 ? `{ ${options.join(', ')} }` : '{}';
 };
 
+/** The `referencing` option of `pgTrigger()` that names the transition tables, as `pull` writes it. */
+export const renderTriggerReferencingOption = (oldTable: string | null, newTable: string | null) => {
+	const options = [
+		...(oldTable !== null ? [`oldTable: ${JSON.stringify(oldTable)}`] : []),
+		...(newTable !== null ? [`newTable: ${JSON.stringify(newTable)}`] : []),
+	];
+	return `{ ${options.join(', ')} }`;
+};
+
+/** An identifier as `quote_identifier` prints it: bare, or in double quotes with each inner quote doubled. */
+const triggerIdentifierPattern = '"(?:[^"]|"")+"|[^\\s"]+';
+
+/** The name of an identifier that `quote_identifier` printed, without its quotes. */
+const unquoteIdentifier = (printed: string) =>
+	printed.startsWith('"') ? printed.slice(1, -1).replaceAll('""', '"') : printed;
+
 /**
  * What `pg_get_triggerdef` prints, taken apart: the timing with the events,
  * the level, the `WHEN` condition (the text inside its parentheses, as
  * Postgres prints it; null when there is none), the deferral of a
- * constraint trigger (null for a plain trigger) and the schema and the name
- * of the called function; null for a text this does not read (a transition
- * table, a constraint trigger with `FROM`), which stays outside the
+ * constraint trigger (null for a plain trigger), the names of the
+ * transition tables (`REFERENCING OLD TABLE AS ... NEW TABLE AS ...`,
+ * without quotes; null for a table the trigger does not have) and the
+ * schema and the name of the called function; null for a text this does
+ * not read (a constraint trigger with `FROM`), which stays outside the
  * schema's reach.
  */
 export const parseTriggerDefinition = (definition: string) => {
-	const m =
-		/^CREATE (?<constraint>CONSTRAINT )?TRIGGER \S+ (?<timing>BEFORE|AFTER|INSTEAD OF) (?<events>.+?) ON \S+ (?:(?<deferral>(?:NOT )?DEFERRABLE INITIALLY (?:IMMEDIATE|DEFERRED)) )?FOR EACH (?<level>ROW|STATEMENT)(?: WHEN \((?<condition>.+)\))? EXECUTE (?:FUNCTION|PROCEDURE) (?<function>.+)\(\)$/s
-			.exec(definition.trim());
+	const name = triggerIdentifierPattern;
+	const m = new RegExp(
+		`^CREATE (?<constraint>CONSTRAINT )?TRIGGER \\S+ (?<timing>BEFORE|AFTER|INSTEAD OF) (?<events>.+?) ON \\S+ `
+			+ `(?:(?<deferral>(?:NOT )?DEFERRABLE INITIALLY (?:IMMEDIATE|DEFERRED)) )?`
+			// Postgres prints the old table before the new one
+			+ `(?:REFERENCING (?:OLD TABLE AS (?<oldTable>${name}) )?(?:NEW TABLE AS (?<newTable>${name}) )?)?`
+			+ `FOR EACH (?<level>ROW|STATEMENT)(?: WHEN \\((?<condition>.+)\\))? EXECUTE (?:FUNCTION|PROCEDURE) (?<function>.+)\\(\\)$`,
+		's',
+	).exec(definition.trim());
 	if (!m?.groups) return null;
-	const { constraint, timing, events, deferral, level, condition, function: called } = m.groups;
+	const { constraint, timing, events, deferral, oldTable, newTable, level, condition, function: called } = m.groups;
 	// Postgres prints the deferral of every constraint trigger, and of no other trigger
 	if (!constraint !== !deferral) return null;
 	// The function is `schema.name`, or `name` in `public`.
@@ -2688,6 +2712,8 @@ export const parseTriggerDefinition = (definition: string) => {
 		level: level as 'ROW' | 'STATEMENT',
 		condition: condition ?? null,
 		constraint: deferral ?? null,
+		oldTable: oldTable !== undefined ? unquoteIdentifier(oldTable) : null,
+		newTable: newTable !== undefined ? unquoteIdentifier(newTable) : null,
 		functionSchema,
 		functionName,
 	};

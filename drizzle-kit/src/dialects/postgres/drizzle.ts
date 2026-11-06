@@ -926,6 +926,8 @@ export const fromDrizzleSchema = (
 			level: trigger.level,
 			condition: trigger.condition?.trim() || null,
 			constraint: trigger.constraint ? renderTriggerDeferral(trigger.constraint) : null,
+			oldTable: trigger.referencing?.oldTable ?? null,
+			newTable: trigger.referencing?.newTable ?? null,
 			functionSchema: callee.schema,
 			functionName: callee.name,
 			comment: trigger.comment ?? null,

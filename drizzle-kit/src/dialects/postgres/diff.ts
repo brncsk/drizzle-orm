@@ -956,7 +956,8 @@ export const ddlDiff = async (
 		&& !triggersToDrop.some((d) => sameTrigger(d, it.$left))
 	);
 	const commentAloneChanged = (it: DiffEntities['triggers']) =>
-		!!it.comment && !it.when && !it.level && !it.condition && !it.constraint && !it.functionSchema
+		!!it.comment && !it.when && !it.level && !it.condition && !it.constraint && !it.oldTable && !it.newTable
+		&& !it.functionSchema
 		&& !it.functionName;
 	const triggersToRecreate = constraintTriggerAlters.filter((it) => !commentAloneChanged(it)).map((it) => it.$left);
 	const triggersToComment = constraintTriggerAlters.filter(commentAloneChanged).map((it) => it.$right);

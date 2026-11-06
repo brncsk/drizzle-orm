@@ -190,7 +190,10 @@ export const createDDL = () => {
 			`constraint` is the deferral of a constraint trigger as
 			`pg_get_triggerdef` prints it (`DEFERRABLE INITIALLY DEFERRED`,
 			`DEFERRABLE INITIALLY IMMEDIATE` or `NOT DEFERRABLE INITIALLY
-			IMMEDIATE`), and null for a plain trigger.
+			IMMEDIATE`), and null for a plain trigger. `oldTable` and `newTable`
+			are the names of the transition tables (`REFERENCING OLD TABLE AS
+			... NEW TABLE AS ...`), without quotes, and null when the trigger
+			does not have that table.
 		*/
 		triggers: {
 			schema: 'string',
@@ -200,6 +203,8 @@ export const createDDL = () => {
 			level: ['ROW', 'STATEMENT'],
 			condition: 'string?',
 			constraint: 'string?',
+			oldTable: 'string?',
+			newTable: 'string?',
 			functionSchema: 'string',
 			functionName: 'string',
 			comment: 'string?',

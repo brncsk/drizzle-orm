@@ -167,6 +167,8 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		level: 'ROW',
 		condition: null,
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'acl',
 		functionName: 'grants_recompile',
 	});
@@ -179,6 +181,8 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		level: 'STATEMENT',
 		condition: null,
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'public',
 		functionName: 'fields_check',
 	});
@@ -192,6 +196,8 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		level: 'ROW',
 		condition: "((old.scope IS DISTINCT FROM new.scope) OR (current_setting('x'::text, true) = 'on'::text))",
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'tree',
 		functionName: 'objects_fan_out',
 	});
@@ -205,6 +211,8 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		level: 'ROW',
 		condition: null,
 		constraint: 'DEFERRABLE INITIALLY DEFERRED',
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'registry',
 		functionName: 'layers_hold',
 	});
@@ -217,15 +225,41 @@ test('parseTriggerDefinition reads what pg_get_triggerdef prints', () => {
 		level: 'ROW',
 		condition: '(old.name IS DISTINCT FROM new.name)',
 		constraint: 'NOT DEFERRABLE INITIALLY IMMEDIATE',
+		oldTable: null,
+		newTable: null,
 		functionSchema: 'public',
 		functionName: 'audit',
 	});
-	// a transition table is not read, nor a constraint trigger that names a referenced table
+	// the transition tables: the old one before the new one, a quoted name without its quotes
 	expect(
 		parseTriggerDefinition(
 			'CREATE TRIGGER t AFTER INSERT ON public.users REFERENCING NEW TABLE AS added FOR EACH STATEMENT EXECUTE FUNCTION audit()',
 		),
-	).toBeNull();
+	).toStrictEqual({
+		when: 'AFTER INSERT',
+		level: 'STATEMENT',
+		condition: null,
+		constraint: null,
+		oldTable: null,
+		newTable: 'added',
+		functionSchema: 'public',
+		functionName: 'audit',
+	});
+	expect(
+		parseTriggerDefinition(
+			'CREATE TRIGGER t AFTER UPDATE ON public.users REFERENCING OLD TABLE AS "Before ""x""" NEW TABLE AS after_rows FOR EACH ROW WHEN ((old.name IS DISTINCT FROM new.name)) EXECUTE FUNCTION audit()',
+		),
+	).toStrictEqual({
+		when: 'AFTER UPDATE',
+		level: 'ROW',
+		condition: '(old.name IS DISTINCT FROM new.name)',
+		constraint: null,
+		oldTable: 'Before "x"',
+		newTable: 'after_rows',
+		functionSchema: 'public',
+		functionName: 'audit',
+	});
+	// a constraint trigger that names a referenced table is not read
 	expect(
 		parseTriggerDefinition(
 			'CREATE CONSTRAINT TRIGGER t AFTER INSERT ON public.users FROM public.roles DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION audit()',

@@ -20,6 +20,20 @@ export interface PgConstraintTriggerConfig {
 	initiallyDeferred?: boolean;
 }
 
+/**
+ * The transition tables of an `AFTER` trigger (`REFERENCING OLD TABLE AS
+ * ... NEW TABLE AS ...`): the rows of the statement before it ran and after
+ * it ran, under the names that the function's queries use. A
+ * statement-level trigger reads the rows of the whole statement this way,
+ * in one query, instead of one call per row.
+ */
+export interface PgTriggerTransitionTables {
+	/** The name of the rows as they were before the statement. Only an `UPDATE` or `DELETE` trigger has it. */
+	oldTable?: string;
+	/** The name of the rows as they are after the statement. Only an `INSERT` or `UPDATE` trigger has it. */
+	newTable?: string;
+}
+
 export interface PgTriggerConfig {
 	/** The table the trigger is bound to: the declared table, or its name (`schema.table` when not in `public`). */
 	on: PgTable | string;
@@ -40,6 +54,13 @@ export interface PgTriggerConfig {
 	 * A plain trigger when left out.
 	 */
 	constraint?: PgConstraintTriggerConfig;
+	/**
+	 * The transition tables of the trigger, at least one of the two.
+	 * Postgres accepts them only on a plain `AFTER` trigger with one event
+	 * and no column list (`AFTER INSERT`, not `AFTER INSERT OR UPDATE` or
+	 * `AFTER UPDATE OF name`). None when left out.
+	 */
+	referencing?: PgTriggerTransitionTables;
 	/** The trigger function: the declared function, or its qualified name. It takes no parameters and returns `trigger`. */
 	function: PgFunction | string;
 	/** The comment the trigger carries in the database (`COMMENT ON TRIGGER`). */
@@ -47,9 +68,37 @@ export interface PgTriggerConfig {
 }
 
 /**
+ * Refuses the transition tables that Postgres refuses: none named, on a
+ * trigger that is not a plain `AFTER` trigger, on more than one event or
+ * on a column list, and a table that the event does not have (an old
+ * table of an `INSERT`, a new table of a `DELETE`).
+ */
+function checkTransitionTables(name: string, config: PgTriggerConfig): void {
+	const { oldTable, newTable } = config.referencing ?? {};
+	if (!oldTable && !newTable) {
+		throw new Error(`Trigger "${name}" declares transition tables, so it names an old table, a new table or both`);
+	}
+	const timing = /^\s*AFTER\s+(?<events>.+)$/is.exec(config.when);
+	if (!timing?.groups || config.constraint) {
+		throw new Error(`Trigger "${name}" has transition tables, so it is a plain AFTER trigger`);
+	}
+	const events = timing.groups['events']!.trim();
+	if (/\s+OR\s+/i.test(events) || /\s+OF\s+/i.test(events)) {
+		throw new Error(`Trigger "${name}" has transition tables, so it fires on one event, without a column list`);
+	}
+	const event = events.toUpperCase();
+	if (oldTable && event !== 'UPDATE' && event !== 'DELETE') {
+		throw new Error(`Trigger "${name}" has an old table, so it fires AFTER UPDATE or AFTER DELETE`);
+	}
+	if (newTable && event !== 'INSERT' && event !== 'UPDATE') {
+		throw new Error(`Trigger "${name}" has a new table, so it fires AFTER INSERT or AFTER UPDATE`);
+	}
+}
+
+/**
  * A trigger of a table, as the schema declares it: when it fires, at which
- * level, on which condition, whether it is a constraint trigger, and the
- * function it calls. drizzle-kit creates it after its table and its
+ * level, on which condition, whether it is a constraint trigger, its
+ * transition tables, and the function it calls. drizzle-kit creates it after its table and its
  * function exist, replaces it in place when it changes (a constraint
  * trigger is dropped and created again, since Postgres cannot replace
  * one), and drops it before the function it calls is dropped.
@@ -66,6 +115,7 @@ export class PgTrigger {
 	readonly level: 'ROW' | 'STATEMENT';
 	readonly condition: string | undefined;
 	readonly constraint: Required<PgConstraintTriggerConfig> | undefined;
+	readonly referencing: PgTriggerTransitionTables | undefined;
 	readonly function: PgFunction | string;
 	readonly comment: string | undefined;
 
@@ -93,6 +143,10 @@ export class PgTrigger {
 				initiallyDeferred: config.constraint.initiallyDeferred ?? false,
 			}
 			: undefined;
+		if (config.referencing) {
+			checkTransitionTables(name, config);
+		}
+		this.referencing = config.referencing;
 		this.function = config.function;
 		this.comment = config.comment;
 	}
@@ -107,6 +161,15 @@ export class PgTrigger {
  * 	on: users,
  * 	when: 'AFTER INSERT OR UPDATE',
  * 	function: auditRow,
+ * });
+ *
+ * // one call per statement, which reads the inserted rows as `added`
+ * export const ordersAdded = pgTrigger('orders_added', {
+ * 	on: orders,
+ * 	when: 'AFTER INSERT',
+ * 	level: 'STATEMENT',
+ * 	referencing: { newTable: 'added' },
+ * 	function: countOrders,
  * });
  *
  * // checked at COMMIT, against the final state of the transaction

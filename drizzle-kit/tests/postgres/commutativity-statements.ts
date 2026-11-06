@@ -210,6 +210,8 @@ export const rows = (prefix = ''): Record<string, Row> => {
 		level: 'ROW',
 		condition: null,
 		constraint: null,
+		oldTable: null,
+		newTable: null,
 		functionSchema: schema,
 		functionName: triggerFunction.name,
 		comment: null,
