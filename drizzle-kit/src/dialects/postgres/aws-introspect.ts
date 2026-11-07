@@ -32,6 +32,7 @@ import {
 	parseOnType,
 	parseTriggerDefinition,
 	parseViewDefinition,
+	renderForeignKeyDeferral,
 	stringFromDatabaseIdentityProperty as parseIdentityProperty,
 	wrapRecord,
 } from './grammar';
@@ -597,6 +598,8 @@ export const fromDatabase = async (
 		columnsToOrdinals: number[];
 		onUpdate: 'a' | 'd' | 'r' | 'c' | 'n';
 		onDelete: 'a' | 'd' | 'r' | 'c' | 'n';
+		deferrable: boolean;
+		initiallyDeferred: boolean;
 	}>(`
     SELECT
       oid,
@@ -610,7 +613,9 @@ export const fromDatabase = async (
       confrelid AS "tableToId",
       confkey AS "columnsToOrdinals",
       confupdtype::text AS "onUpdate",
-      confdeltype::text AS "onDelete"
+      confdeltype::text AS "onDelete",
+      condeferrable AS "deferrable",
+      condeferred AS "initiallyDeferred"
     FROM
       pg_catalog.pg_constraint
     WHERE ${filterByTableIds ? ` conrelid IN ${filterByTableIds}` : 'false'}
@@ -1038,6 +1043,7 @@ export const fromDatabase = async (
 			columnsTo,
 			onUpdate: parseOnType(fk.onUpdate),
 			onDelete: parseOnType(fk.onDelete),
+			deferral: renderForeignKeyDeferral(fk),
 		});
 	}
 

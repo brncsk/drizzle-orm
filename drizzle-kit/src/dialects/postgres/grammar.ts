@@ -2156,6 +2156,28 @@ export const defaultToSQL = (
 	return `${defaultValue}${suffix}`;
 };
 
+/** The deferral of a foreign key (the `deferral` of its DDL entity): what `generate` writes and `pull` reads. */
+export type ForeignKeyDeferral = PostgresEntities['fks']['deferral'];
+
+/**
+ * The deferral of a foreign key as the DDL entity holds it: null for `NOT
+ * DEFERRABLE`, the clause otherwise. `deferrable` and `initiallyDeferred` are
+ * the flags of the declaration, or `condeferrable` and `condeferred` of
+ * `pg_constraint`.
+ */
+export const renderForeignKeyDeferral = (
+	key: { deferrable: boolean; initiallyDeferred: boolean },
+): ForeignKeyDeferral =>
+	key.deferrable
+		? key.initiallyDeferred ? 'DEFERRABLE INITIALLY DEFERRED' : 'DEFERRABLE INITIALLY IMMEDIATE'
+		: null;
+
+/** The `deferrable` and `initiallyDeferred` options of a foreign key, as `pull` writes them; empty for a key that is not deferrable. */
+export const listForeignKeyDeferralOptions = (deferral: ForeignKeyDeferral | undefined): Record<string, true> =>
+	deferral
+		? { deferrable: true, ...(deferral === 'DEFERRABLE INITIALLY DEFERRED' ? { initiallyDeferred: true } : {}) }
+		: {};
+
 export const isDefaultAction = (action: string) => {
 	return action.toLowerCase() === 'no action';
 };

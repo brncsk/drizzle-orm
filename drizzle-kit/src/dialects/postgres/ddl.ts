@@ -76,6 +76,13 @@ export const createDDL = () => {
 			method: 'string',
 			concurrently: 'boolean',
 		},
+		/*
+			`deferral` is when Postgres checks the key, as `ALTER CONSTRAINT`
+			takes it (`DEFERRABLE INITIALLY IMMEDIATE` or `DEFERRABLE INITIALLY
+			DEFERRED`), and null for a key that is `NOT DEFERRABLE`. So a
+			snapshot written before the field reads as keys that are not
+			deferrable.
+		*/
 		fks: {
 			schema: 'string',
 			table: 'string',
@@ -87,6 +94,7 @@ export const createDDL = () => {
 			columnsTo: 'string[]',
 			onUpdate: ['NO ACTION', 'RESTRICT', 'SET NULL', 'CASCADE', 'SET DEFAULT', null],
 			onDelete: ['NO ACTION', 'RESTRICT', 'SET NULL', 'CASCADE', 'SET DEFAULT', null],
+			deferral: ['DEFERRABLE INITIALLY IMMEDIATE', 'DEFERRABLE INITIALLY DEFERRED', null],
 		},
 		pks: {
 			schema: 'string',

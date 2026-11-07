@@ -83,6 +83,7 @@ import {
 	normalizeSqlTypeName,
 	normalizeTriggerWhen,
 	Point,
+	renderForeignKeyDeferral,
 	renderTriggerDeferral,
 	splitSqlType,
 	stringFromIdentityProperty,
@@ -554,6 +555,7 @@ export const fromDrizzleSchema = (
 					columnsTo,
 					onDelete: onDelete ? transformOnUpdateDelete(onDelete) : null,
 					onUpdate: onUpdate ? transformOnUpdateDelete(onUpdate) : null,
+					deferral: renderForeignKeyDeferral(fk),
 				} satisfies ForeignKey;
 			}),
 		);

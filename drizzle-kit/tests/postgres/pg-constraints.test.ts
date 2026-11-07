@@ -2851,3 +2851,68 @@ test('Issue No6368', async () => {
 	expect(st1).toStrictEqual(st0);
 	expect(pst1).toStrictEqual(st0);
 });
+
+test('a deferrable foreign key is created with its deferral', async () => {
+	const users = pgTable('users', {
+		id: serial().primaryKey(),
+	});
+	const posts = pgTable('posts', {
+		id: serial().primaryKey(),
+		authorId: integer().references(() => users.id, { onDelete: 'cascade', deferrable: true }),
+		editorId: integer(),
+	}, (t) => [
+		foreignKey({ columns: [t.editorId], foreignColumns: [users.id] }).deferrable({
+			deferrable: true,
+			initiallyDeferred: true,
+		}),
+	]);
+
+	const to = { posts, users };
+
+	const { sqlStatements } = await diff({}, to, []);
+	const { sqlStatements: pst } = await push({ db, to });
+
+	const e = [
+		`CREATE TABLE "posts" (\n\t"id" serial PRIMARY KEY,\n\t"authorId" integer,\n\t"editorId" integer\n);\n`,
+		`CREATE TABLE "users" (\n\t"id" serial PRIMARY KEY\n);\n`,
+		`ALTER TABLE "posts" ADD CONSTRAINT "posts_authorId_users_id_fkey" FOREIGN KEY ("authorId") REFERENCES "users"("id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE;`,
+		`ALTER TABLE "posts" ADD CONSTRAINT "posts_editorId_users_id_fkey" FOREIGN KEY ("editorId") REFERENCES "users"("id") DEFERRABLE INITIALLY DEFERRED;`,
+	];
+	expect(sqlStatements).toStrictEqual(e);
+	expect(pst).toStrictEqual(e);
+
+	const { sqlStatements: again } = await push({ db, to });
+	expect(again).toStrictEqual([]);
+});
+
+test('a change of the deferral alone alters the foreign key in place', async () => {
+	const users = pgTable('users', {
+		id: serial().primaryKey(),
+	});
+	const before = pgTable('posts', {
+		id: serial().primaryKey(),
+		authorId: integer().references(() => users.id, { onDelete: 'cascade' }),
+	});
+	const after = pgTable('posts', {
+		id: serial().primaryKey(),
+		authorId: integer().references(() => users.id, { onDelete: 'cascade', deferrable: true }),
+	});
+
+	const { sqlStatements: deferred } = await diff({ posts: before, users }, { posts: after, users }, []);
+	await push({ db, to: { posts: before, users } });
+	const { sqlStatements: pushedDeferred } = await push({ db, to: { posts: after, users } });
+
+	const e = [`ALTER TABLE "posts" ALTER CONSTRAINT "posts_authorId_users_id_fkey" DEFERRABLE INITIALLY IMMEDIATE;`];
+	expect(deferred).toStrictEqual(e);
+	expect(pushedDeferred).toStrictEqual(e);
+
+	const { sqlStatements: undone } = await diff({ posts: after, users }, { posts: before, users }, []);
+	expect(undone).toStrictEqual([`ALTER TABLE "posts" ALTER CONSTRAINT "posts_authorId_users_id_fkey" NOT DEFERRABLE;`]);
+});
+
+test('a foreign key that is initially deferred must be deferrable', () => {
+	const users = pgTable('users', { id: serial().primaryKey() });
+
+	expect(() => foreignKey({ columns: [users.id], foreignColumns: [users.id] }).deferrable({ initiallyDeferred: true }))
+		.toThrow('A foreign key that is initially deferred must be deferrable');
+});

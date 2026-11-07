@@ -1,7 +1,7 @@
 import type { ColumnType, GeneratedColumnConfig, GeneratedIdentityConfig } from '~/column-builder.ts';
 import { Column } from '~/column.ts';
 import { entityKind, is } from '~/entity.ts';
-import type { ForeignKey, UpdateDeleteAction } from '~/pg-core/foreign-keys.ts';
+import type { ForeignKey, ForeignKeyDeferral, UpdateDeleteAction } from '~/pg-core/foreign-keys.ts';
 import { ForeignKeyBuilder } from '~/pg-core/foreign-keys.ts';
 import type { AnyPgTable, PgTable } from '~/pg-core/table.ts';
 import type { SQL } from '~/sql/sql.ts';
@@ -164,7 +164,7 @@ export interface ReferenceConfig {
 		name?: string;
 		onUpdate?: UpdateDeleteAction;
 		onDelete?: UpdateDeleteAction;
-	};
+	} & ForeignKeyDeferral;
 }
 
 export abstract class PgColumnBuilder<
@@ -362,6 +362,9 @@ export abstract class PgColumnBuilder<
 					}
 					if (config.onDelete) {
 						builder.onDelete(config.onDelete);
+					}
+					if (config.deferrable || config.initiallyDeferred) {
+						builder.deferrable(config);
 					}
 					return builder.build(table);
 				},

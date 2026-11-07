@@ -3168,6 +3168,7 @@ test('filtered out table referenced by fk', async () => {
 			tableTo: 'orgs',
 			columnsTo: ['id'],
 			onUpdate: 'NO ACTION',
+			deferral: null,
 			onDelete: 'NO ACTION',
 		},
 		{
@@ -3181,6 +3182,7 @@ test('filtered out table referenced by fk', async () => {
 			tableTo: 'teams',
 			columnsTo: ['id'],
 			onUpdate: 'NO ACTION',
+			deferral: null,
 			onDelete: 'CASCADE',
 		},
 	]);
@@ -4250,4 +4252,32 @@ test('introspect json array defaults with a backslash, a backtick and "${"', asy
 	expect(generateSqlStatements).toStrictEqual([]);
 	expect(defaultsInDatabase[0]).toStrictEqual(['column1', `'${arrayLiteral}'`]);
 	expect(schema2.columns.map((it) => [it.name, it.default])).toStrictEqual(defaultsInDatabase);
+});
+
+test('a deferrable foreign key is pulled with its deferral', async () => {
+	const users = pgTable('users', {
+		id: integer('id').primaryKey(),
+	});
+	const posts = pgTable('posts', {
+		id: integer('id').primaryKey(),
+		authorId: integer('author_id').references(() => users.id, { deferrable: true }),
+		editorId: integer('editor_id'),
+	}, (t) => [
+		foreignKey({ columns: [t.editorId], foreignColumns: [users.id] }).deferrable({
+			deferrable: true,
+			initiallyDeferred: true,
+		}),
+	]);
+
+	const {
+		pushStatements,
+		pushSqlStatements,
+		generateStatements,
+		generateSqlStatements,
+	} = await diffIntrospect(db, { users, posts }, 'deferrable-foreign-keys');
+
+	expect(pushStatements).toStrictEqual([]);
+	expect(pushSqlStatements).toStrictEqual([]);
+	expect(generateStatements).toStrictEqual([]);
+	expect(generateSqlStatements).toStrictEqual([]);
 });

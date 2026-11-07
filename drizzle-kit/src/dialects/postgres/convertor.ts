@@ -2,7 +2,7 @@ import '../../@types/utils';
 import { escapeSingleQuotes, type Simplify, wrapWith } from '../../utils';
 import type { Function, Trigger, View } from './ddl';
 import { defaultNameForPK, defaults, defaultToSQL, isDefaultAction, isSerialType, mapSerialToInt } from './grammar';
-import type { JsonStatement } from './statements';
+import type { JsonRecreateFK, JsonStatement } from './statements';
 
 export const convertor = <
 	TType extends JsonStatement['type'],
@@ -633,7 +633,7 @@ const renameConstraintConvertor = convertor('rename_constraint', (st) => {
 });
 
 const createForeignKeyConvertor = convertor('create_fk', (st) => {
-	const { schema, table, name, tableTo, columns, columnsTo, onDelete, onUpdate, schemaTo } = st.fk;
+	const { schema, table, name, tableTo, columns, columnsTo, onDelete, onUpdate, schemaTo, deferral } = st.fk;
 
 	const onDeleteStatement = onDelete && !isDefaultAction(onDelete) ? ` ON DELETE ${onDelete}` : '';
 	const onUpdateStatement = onUpdate && !isDefaultAction(onUpdate) ? ` ON UPDATE ${onUpdate}` : '';
@@ -648,8 +648,19 @@ const createForeignKeyConvertor = convertor('create_fk', (st) => {
 		? `"${schemaTo}"."${tableTo}"`
 		: `"${tableTo}"`;
 
-	return `ALTER TABLE ${tableNameWithSchema} ADD CONSTRAINT "${name}" FOREIGN KEY (${fromColumnsString}) REFERENCES ${tableToNameWithSchema}(${toColumnsString})${onDeleteStatement}${onUpdateStatement};`;
+	const deferralStatement = deferral ? ` ${deferral}` : '';
+
+	return `ALTER TABLE ${tableNameWithSchema} ADD CONSTRAINT "${name}" FOREIGN KEY (${fromColumnsString}) REFERENCES ${tableToNameWithSchema}(${toColumnsString})${onDeleteStatement}${onUpdateStatement}${deferralStatement};`;
 });
+
+/**
+ * True when an altered foreign key changed only its deferral. `ALTER
+ * CONSTRAINT` changes that in place; dropping and adding the key again would
+ * check every row of the table again.
+ */
+const changedDeferralAlone = (diff: JsonRecreateFK['diff']) =>
+	!!diff.deferral && !diff.columns && !diff.columnsTo && !diff.tableTo && !diff.schemaTo && !diff.onUpdate
+	&& !diff.onDelete;
 
 const recreateFKConvertor = convertor('recreate_fk', (st) => {
 	const { fk } = st;
@@ -657,6 +668,10 @@ const recreateFKConvertor = convertor('recreate_fk', (st) => {
 	const key = fk.schema !== 'public'
 		? `"${fk.schema}"."${fk.table}"`
 		: `"${fk.table}"`;
+
+	if (changedDeferralAlone(st.diff)) {
+		return `ALTER TABLE ${key} ALTER CONSTRAINT "${fk.name}" ${fk.deferral ?? 'NOT DEFERRABLE'};`;
+	}
 
 	const onDeleteStatement = fk.onDelete !== 'NO ACTION'
 		? ` ON DELETE ${fk.onDelete}`
@@ -676,7 +691,9 @@ const recreateFKConvertor = convertor('recreate_fk', (st) => {
 
 	let sql = `ALTER TABLE ${key} DROP CONSTRAINT "${fk.name}", `;
 	sql += `ADD CONSTRAINT "${fk.name}" FOREIGN KEY (${fromColumnsString}) `;
-	sql += `REFERENCES ${tableToNameWithSchema}(${toColumnsString})${onDeleteStatement}${onUpdateStatement};`;
+	sql += `REFERENCES ${tableToNameWithSchema}(${toColumnsString})${onDeleteStatement}${onUpdateStatement}${
+		fk.deferral ? ` ${fk.deferral}` : ''
+	};`;
 
 	return sql;
 });

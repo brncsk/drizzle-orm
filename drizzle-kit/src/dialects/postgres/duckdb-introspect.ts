@@ -640,6 +640,7 @@ export const fromDatabase = async (
 			columnsTo,
 			onUpdate: 'NO ACTION',
 			onDelete: 'NO ACTION',
+			deferral: null,
 		});
 	}
 

@@ -27,6 +27,7 @@ import {
 	defaultNameForIdentitySequence,
 	defaultNameForPK,
 	defaults,
+	listForeignKeyDeferralOptions,
 	renderTriggerConstraintOption,
 	renderTriggerReferencingOption,
 	typeFor,
@@ -87,7 +88,8 @@ const objToStatement2 = (json: { [s: string]: unknown }) => {
 	if (keys.length === 0) return;
 
 	let statement = '{ ';
-	statement += keys.map((it) => `${it}: "${json[it]}"`).join(', '); // no "" for keys
+	// no "" for keys, nor for a flag
+	statement += keys.map((it) => `${it}: ${typeof json[it] === 'boolean' ? json[it] : `"${json[it]}"`}`).join(', ');
 	statement += ' }';
 	return statement;
 };
@@ -749,7 +751,7 @@ const createTableColumns = (
 				.map((it) => {
 					const onDelete = it.onDelete && it.onDelete !== 'NO ACTION' ? it.onDelete.toLowerCase() : null;
 					const onUpdate = it.onUpdate && it.onUpdate !== 'NO ACTION' ? it.onUpdate.toLowerCase() : null;
-					const params = { onDelete, onUpdate };
+					const params = { onDelete, onUpdate, ...listForeignKeyDeferralOptions(it.deferral) };
 
 					const typeSuffix = isCyclic(it) ? ': AnyPgColumn' : '';
 
@@ -932,6 +934,7 @@ const createTableFKs = (fks: ForeignKey[], schemas: Record<string, string>, casi
 
 		statement += it.onUpdate && it.onUpdate !== 'NO ACTION' ? `.onUpdate("${it.onUpdate.toLowerCase()}")` : '';
 		statement += it.onDelete && it.onDelete !== 'NO ACTION' ? `.onDelete("${it.onDelete.toLowerCase()}")` : '';
+		statement += it.deferral ? `.deferrable(${JSON.stringify(listForeignKeyDeferralOptions(it.deferral))})` : '';
 		statement += `,\n`;
 	});
 	return statement;

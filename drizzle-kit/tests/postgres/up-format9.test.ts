@@ -18,6 +18,7 @@ import { cpSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { CommandOutputCliError, errorToEnvelope } from 'src/cli/errors';
 import { normalizeDDL } from 'src/dialects/ddl-canonical';
+import { createDDL } from 'src/dialects/postgres/ddl';
 import { type PostgresSnapshotV8, snapshotValidator } from 'src/dialects/postgres/snapshot';
 import { expect, test } from 'vitest';
 import { ORIGIN, writeSnapshot } from '../other/check-fixtures';
@@ -55,11 +56,19 @@ const upError = (kind: string, fields: Record<string, unknown>) => ({
 	error: { code: 'command_output_error', command: 'up', kind, ...fields },
 });
 
+// Reads the entities of a format 8 file as a state holds them: a field that the file was written without
+// (the `deferral` of a foreign key) reads as null.
+const readStoredState = (rows: PostgresSnapshotV8['ddl']) => {
+	const ddl = createDDL();
+	ddl.entities.pushAll(rows);
+	return normalizeDDL(ddl.entities.list());
+};
+
 // Checks that every converted snapshot reconstructs to the state that its format 8 file stores.
 const expectOriginalStates = (flow: FolderFlow, original: Map<string, PostgresSnapshotV8>) => {
 	expect(flow.folders('main')).toStrictEqual([...original.keys()]);
 	for (const [folder, it] of original) {
-		expect(flow.state('main', folder)).toStrictEqual(normalizeDDL(it.ddl));
+		expect(flow.state('main', folder)).toStrictEqual(readStoredState(it.ddl));
 	}
 };
 

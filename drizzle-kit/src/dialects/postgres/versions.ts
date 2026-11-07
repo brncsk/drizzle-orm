@@ -242,6 +242,7 @@ export const upToV8 = (
 				columnsTo: fk.columnsTo,
 				onDelete: (fk.onDelete?.toUpperCase() as any) ?? 'NO ACTION',
 				onUpdate: (fk.onUpdate?.toUpperCase() as any) ?? 'NO ACTION',
+				deferral: null,
 			});
 		}
 

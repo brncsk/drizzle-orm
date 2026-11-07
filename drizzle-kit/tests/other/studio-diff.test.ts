@@ -76,6 +76,7 @@ const postgresForeignKey = (
 	columnsTo,
 	onUpdate: 'NO ACTION',
 	onDelete: 'NO ACTION',
+	deferral: null,
 });
 
 const postgresTable = (name: string, columns: string[], rest: Partial<PostgresTable> = {}): PostgresTable => ({
